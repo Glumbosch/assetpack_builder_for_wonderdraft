@@ -1,0 +1,69 @@
+name: Build release binaries
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libasound2-dev \
+            pkg-config
+      - name: Test
+        run: cargo test
+      - name: Build release
+        run: cargo build --release
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/release/wonderdraft-asset-studio dist/wonderdraft-asset-studio-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wonderdraft-asset-studio-linux-x86_64
+          path: dist/wonderdraft-asset-studio-linux-x86_64
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - name: Test
+        run: cargo test
+      - name: Build release
+        run: cargo build --release
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\wonderdraft-asset-studio.exe dist\wonderdraft-asset-studio-windows-x86_64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wonderdraft-asset-studio-windows-x86_64
+          path: dist/wonderdraft-asset-studio-windows-x86_64.exe
+          if-no-files-found: error
