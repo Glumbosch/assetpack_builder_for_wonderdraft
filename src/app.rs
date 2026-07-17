@@ -40,6 +40,36 @@ enum SpriteTool {
     Erase,
     Restore,
     PickColor,
+    ErasePickedColor,
+}
+
+impl SpriteTool {
+    const ALL: [Self; 4] = [
+        Self::Erase,
+        Self::Restore,
+        Self::PickColor,
+        Self::ErasePickedColor,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Erase => "Erase",
+            Self::Restore => "Restore",
+            Self::PickColor => "Pick color",
+            Self::ErasePickedColor => "Erase picked color",
+        }
+    }
+
+    const fn tooltip(self) -> &'static str {
+        match self {
+            Self::Erase => "Erase every pixel touched by the brush.",
+            Self::Restore => "Restore touched pixels from the original sprite.",
+            Self::PickColor => "Click the sprite to choose a color for color-based erasing.",
+            Self::ErasePickedColor => {
+                "Erase only pixels matching the picked color within the current tolerance."
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +128,18 @@ fn draw_mode_icon(ui: &mut egui::Ui, mode: DrawMode, size: f32) {
 fn photo_share_image(size: f32) -> egui::Image<'static> {
     egui::Image::new(egui::include_image!("../app_assets/icons/photo-share.svg"))
         .fit_to_exact_size(vec2(size, size))
+}
+
+fn transparency_tool_image(tool: SpriteTool, size: f32) -> egui::Image<'static> {
+    let icon = match tool {
+        SpriteTool::Erase => egui::include_image!("../app_assets/icons/eraser.svg"),
+        SpriteTool::Restore => egui::include_image!("../app_assets/icons/eraser-off.svg"),
+        SpriteTool::PickColor => egui::include_image!("../app_assets/icons/color-picker.svg"),
+        SpriteTool::ErasePickedColor => {
+            egui::include_image!("../app_assets/icons/eraser_color.svg")
+        }
+    };
+    egui::Image::new(icon).fit_to_exact_size(vec2(size, size))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -268,7 +310,7 @@ impl AssetpackBuilderForWonderdraft {
 
     fn active_brush_size(&self, tool: SpriteTool) -> Option<f32> {
         match tool {
-            SpriteTool::Erase => Some(self.erase_brush_size),
+            SpriteTool::Erase | SpriteTool::ErasePickedColor => Some(self.erase_brush_size),
             SpriteTool::Restore => Some(self.restore_brush_size),
             SpriteTool::PickColor => None,
         }
@@ -276,7 +318,7 @@ impl AssetpackBuilderForWonderdraft {
 
     fn adjust_active_brush_size(&mut self, amount: f32) {
         let brush_size = match self.sprite_tool {
-            SpriteTool::Erase => &mut self.erase_brush_size,
+            SpriteTool::Erase | SpriteTool::ErasePickedColor => &mut self.erase_brush_size,
             SpriteTool::Restore => &mut self.restore_brush_size,
             SpriteTool::PickColor => return,
         };
@@ -1171,16 +1213,32 @@ impl AssetpackBuilderForWonderdraft {
     fn top_bar(&mut self, root_ui: &mut egui::Ui) {
         egui::Panel::top("top_bar").show(root_ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("New").clicked() {
+                if ui
+                    .button("New")
+                    .on_hover_text("Start a new empty asset-pack project.")
+                    .clicked()
+                {
                     self.new_project();
                 }
-                if ui.button("Open project").clicked() {
+                if ui
+                    .button("Open project")
+                    .on_hover_text("Open a saved Wonderdraft asset-pack project.")
+                    .clicked()
+                {
                     self.open_project_action();
                 }
-                if ui.button("Save").clicked() {
+                if ui
+                    .button("Save")
+                    .on_hover_text("Save changes to the current project.")
+                    .clicked()
+                {
                     self.save_project_action();
                 }
-                if ui.button("Save as…").clicked() {
+                if ui
+                    .button("Save as…")
+                    .on_hover_text("Save this project to a new file.")
+                    .clicked()
+                {
                     self.save_project_as_action();
                 }
                 ui.separator();
@@ -1190,7 +1248,11 @@ impl AssetpackBuilderForWonderdraft {
                 ui.label("Pack name:");
                 ui.add(egui::TextEdit::singleline(&mut self.pack_name).desired_width(180.0));
                 ui.separator();
-                if ui.button("Settings").clicked() {
+                if ui
+                    .button("Settings")
+                    .on_hover_text("Configure appearance, folders, and keyboard shortcuts.")
+                    .clicked()
+                {
                     self.settings_draft = self.settings.clone();
                     self.shortcut_capture = None;
                     self.settings_open = true;
@@ -1374,7 +1436,11 @@ impl AssetpackBuilderForWonderdraft {
                         shortcut_row!("Redo sprite edit", sprite_redo);
 
                         ui.add_space(8.0);
-                        if ui.button("Reset all keyboard shortcuts").clicked() {
+                        if ui
+                            .button("Reset all keyboard shortcuts")
+                            .on_hover_text("Restore every shortcut to its default binding.")
+                            .clicked()
+                        {
                             self.settings_draft.shortcuts = ShortcutSettings::default();
                             self.shortcut_capture = None;
                         }
@@ -1382,8 +1448,14 @@ impl AssetpackBuilderForWonderdraft {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    save_clicked = ui.button("Save settings").clicked();
-                    cancel_clicked = ui.button("Cancel").clicked();
+                    save_clicked = ui
+                        .button("Save settings")
+                        .on_hover_text("Save these settings and apply the selected appearance.")
+                        .clicked();
+                    cancel_clicked = ui
+                        .button("Cancel")
+                        .on_hover_text("Discard settings changes made in this window.")
+                        .clicked();
                 });
             });
 
@@ -1436,7 +1508,11 @@ impl AssetpackBuilderForWonderdraft {
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.add_space(8.0);
-                    if ui.button("Export Wonderdraft pack").clicked() {
+                    if ui
+                        .button("Export Wonderdraft pack")
+                        .on_hover_text("Write the complete asset pack to an export folder.")
+                        .clicked()
+                    {
                         self.export_action();
                     }
                     let install_label = if self.install_root.is_some() {
@@ -1487,7 +1563,13 @@ impl AssetpackBuilderForWonderdraft {
                             .inner_margin(8.0)
                             .show(ui, |ui| {
                                 ui.strong("Source images");
-                                if ui.button("Import source images…").clicked() {
+                                if ui
+                                    .button("Import source images…")
+                                    .on_hover_text(
+                                        "Add images for cropping into one or more sprites.",
+                                    )
+                                    .clicked()
+                                {
                                     self.import_dialog();
                                 }
                                 ui.label(
@@ -1569,7 +1651,13 @@ impl AssetpackBuilderForWonderdraft {
                             .inner_margin(8.0)
                             .show(ui, |ui| {
                                 ui.strong("Extracted sprites");
-                                if ui.button("Import whole images as sprites…").clicked() {
+                                if ui
+                                    .button("Import whole images as sprites…")
+                                    .on_hover_text(
+                                        "Add complete images directly as extracted sprites.",
+                                    )
+                                    .clicked()
+                                {
                                     self.import_sprite_dialog();
                                 }
                                 ui.label("Drop image files here to extract them without cropping.");
@@ -1668,8 +1756,10 @@ impl AssetpackBuilderForWonderdraft {
                 &mut self.crop_tool,
                 CropTool::SelectMove,
                 "Select / move / resize",
-            );
-            ui.selectable_value(&mut self.crop_tool, CropTool::Draw, "Draw crop");
+            )
+            .on_hover_text("Select crops, move them, or resize their edges and corners.");
+            ui.selectable_value(&mut self.crop_tool, CropTool::Draw, "Draw crop")
+                .on_hover_text("Drag over the source image to create a new crop.");
         });
         ui.label(
             "Draw multiple crop rectangles. In Select mode, drag inside a crop to move it or drag its handles to resize it. Wheel zoom stays anchored under the pointer; middle-drag pans.",
@@ -1713,12 +1803,20 @@ impl AssetpackBuilderForWonderdraft {
                 true,
                 true,
             );
-            if ui.button("Fit").clicked() {
+            if ui
+                .button("Fit")
+                .on_hover_text("Fit the complete source image in the viewer.")
+                .clicked()
+            {
                 self.crop_zoom = 1.0;
                 self.crop_pan = Vec2::ZERO;
             }
         });
-        if ui.button("Rotate 90° clockwise").clicked() {
+        if ui
+            .button("Rotate 90° clockwise")
+            .on_hover_text("Rotate the source image and all of its crop coordinates.")
+            .clicked()
+        {
             self.rotate_selected_source_clockwise();
             return;
         }
@@ -1830,9 +1928,18 @@ impl AssetpackBuilderForWonderdraft {
             }
 
             ui.horizontal_wrapped(|ui| {
-                extract = ui.button("Extract as sprite").clicked();
-                copy = ui.button("Copy crop").clicked();
-                delete = ui.button("Delete crop").clicked();
+                extract = ui
+                    .button("Extract as sprite")
+                    .on_hover_text("Create or update the sprite generated from this crop.")
+                    .clicked();
+                copy = ui
+                    .button("Copy crop")
+                    .on_hover_text("Duplicate the selected crop region.")
+                    .clicked();
+                delete = ui
+                    .button("Delete crop")
+                    .on_hover_text("Delete this crop and unlink its extracted sprite.")
+                    .clicked();
             });
             if has_sprite {
                 ui.label(
@@ -1844,7 +1951,10 @@ impl AssetpackBuilderForWonderdraft {
         }
 
         ui.separator();
-        let extract_all = ui.button("Extract all crops as sprites").clicked();
+        let extract_all = ui
+            .button("Extract all crops as sprites")
+            .on_hover_text("Create or update sprites for every crop in this source image.")
+            .clicked();
 
         if extract {
             self.extract_selected_crop();
@@ -1877,7 +1987,11 @@ impl AssetpackBuilderForWonderdraft {
                 true,
                 true,
             );
-            if ui.button("Fit").clicked() {
+            if ui
+                .button("Fit")
+                .on_hover_text("Fit the complete sprite in the viewer.")
+                .clicked()
+            {
                 self.sprite_zoom = 1.0;
                 self.sprite_pan = Vec2::ZERO;
             }
@@ -1979,11 +2093,19 @@ impl AssetpackBuilderForWonderdraft {
                         ui.end_row();
                     });
                 ui.horizontal(|ui| {
-                    if ui.button("Center pivot").clicked() {
+                    if ui
+                        .button("Center pivot")
+                        .on_hover_text("Place the Wonderdraft pivot at the image center.")
+                        .clicked()
+                    {
                         sprite.offset_x = 0;
                         sprite.offset_y = 0;
                     }
-                    if ui.button("Bottom center").clicked() {
+                    if ui
+                        .button("Bottom center")
+                        .on_hover_text("Place the Wonderdraft pivot at the bottom center.")
+                        .clicked()
+                    {
                         sprite.offset_x = 0;
                         sprite.offset_y = -(sprite.working.height() as i32 / 2);
                     }
@@ -1991,14 +2113,32 @@ impl AssetpackBuilderForWonderdraft {
             }
 
             ui.separator();
-            ui.strong("Transparency tools");
+            ui.strong(format!("Transparency tool: {}", self.sprite_tool.label()));
+            let mut selected_tool = None;
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.sprite_tool, SpriteTool::Erase, "Erase");
-                ui.selectable_value(&mut self.sprite_tool, SpriteTool::Restore, "Restore");
-                ui.selectable_value(&mut self.sprite_tool, SpriteTool::PickColor, "Pick color");
+                for tool in SpriteTool::ALL {
+                    let response = ui
+                        .add(
+                            egui::Button::image(transparency_tool_image(tool, 24.0))
+                                .image_tint_follows_text_color(true)
+                                .selected(self.sprite_tool == tool)
+                                .min_size(vec2(42.0, 42.0)),
+                        )
+                        .on_hover_text(format!("{}: {}", tool.label(), tool.tooltip()));
+                    if response.clicked() {
+                        selected_tool = Some(tool);
+                    }
+                }
             });
+            if let Some(tool) = selected_tool {
+                self.sprite_tool = tool;
+                self.status = format!("Transparency tool: {}.", tool.label());
+                if let Some(focused) = ui.memory(|memory| memory.focused()) {
+                    ui.memory_mut(|memory| memory.surrender_focus(focused));
+                }
+            }
             match self.sprite_tool {
-                SpriteTool::Erase => {
+                SpriteTool::Erase | SpriteTool::ErasePickedColor => {
                     add_wheel_slider(
                         ui,
                         &mut self.erase_brush_size,
@@ -2027,31 +2167,35 @@ impl AssetpackBuilderForWonderdraft {
                 &mut self.tolerance,
                 0..=255,
                 SliderWheel::Linear(1.0),
-                Some("Color / alpha tolerance"),
+                Some("Picked-color / alpha tolerance"),
                 true,
                 false,
             );
 
             ui.horizontal(|ui| {
                 ui.label("Picked color:");
-                let swatch = Color32::from_rgb(
-                    self.picked_color[0],
-                    self.picked_color[1],
-                    self.picked_color[2],
-                );
-                let (rect, _) = ui.allocate_exact_size(vec2(42.0, 22.0), Sense::hover());
-                ui.painter().rect_filled(rect, 3.0, swatch);
+                ui.color_edit_button_srgb(&mut self.picked_color)
+                    .on_hover_text("Open the color picker to choose a color or enter RGB values.");
                 ui.label(format!(
                     "#{:02X}{:02X}{:02X}",
                     self.picked_color[0], self.picked_color[1], self.picked_color[2]
                 ));
             });
 
-            if ui.button("Remove picked color everywhere").clicked() {
+            if ui
+                .button("Remove picked color everywhere")
+                .on_hover_text(
+                    "Remove every pixel in the sprite that matches the picked color and tolerance.",
+                )
+                .clicked()
+            {
                 run_remove_color = true;
             }
             if ui
                 .button("Smart edge-connected background removal")
+                .on_hover_text(
+                    "Remove matching background pixels connected to an outer image edge.",
+                )
                 .clicked()
             {
                 run_smart_edge = true;
@@ -2065,10 +2209,18 @@ impl AssetpackBuilderForWonderdraft {
                 true,
                 false,
             );
-            if ui.button("Soften alpha edge").clicked() {
+            if ui
+                .button("Soften alpha edge")
+                .on_hover_text("Blur alpha values to soften hard transparent edges.")
+                .clicked()
+            {
                 run_soften = true;
             }
-            if ui.button("Threshold alpha").clicked() {
+            if ui
+                .button("Threshold alpha")
+                .on_hover_text("Convert alpha to fully transparent or fully opaque values.")
+                .clicked()
+            {
                 run_threshold = true;
             }
 
@@ -2076,21 +2228,31 @@ impl AssetpackBuilderForWonderdraft {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(!sprite.undo.is_empty(), egui::Button::new("Undo"))
+                    .on_hover_text("Undo the latest transparency or crop edit.")
                     .clicked()
                 {
                     sprite_history_changed = sprite.undo();
                 }
                 if ui
                     .add_enabled(!sprite.redo.is_empty(), egui::Button::new("Redo"))
+                    .on_hover_text("Redo the latest undone edit.")
                     .clicked()
                 {
                     sprite_history_changed = sprite.redo();
                 }
-                if ui.button("Reset original").clicked() {
+                if ui
+                    .button("Reset original")
+                    .on_hover_text("Restore every pixel from the originally extracted sprite.")
+                    .clicked()
+                {
                     reset_original = true;
                 }
             });
-            if ui.button("Delete sprite").clicked() {
+            if ui
+                .button("Delete sprite")
+                .on_hover_text("Delete this sprite while keeping its source crop.")
+                .clicked()
+            {
                 delete = true;
             }
         }
@@ -2195,7 +2357,7 @@ impl AssetpackBuilderForWonderdraft {
         if scroll.abs() > f32::EPSILON || (gesture_zoom - 1.0).abs() > f32::EPSILON {
             let old_zoom = self.crop_zoom;
             let old_pan = self.crop_pan;
-            if pointer_over_image {
+            if viewer_wheel_enabled(self.settings_open, pointer_over_canvas) {
                 let factor = if scroll.abs() > f32::EPSILON {
                     (scroll * 0.0015).exp()
                 } else {
@@ -2211,8 +2373,9 @@ impl AssetpackBuilderForWonderdraft {
             }
             if WHEEL_DEBUG {
                 eprintln!(
-                    "[wheel-debug][crop-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} wheel_points={scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?}",
+                    "[wheel-debug][crop-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} wheel_points={scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?}",
                     response.hovered(),
+                    self.settings_open,
                     self.crop_zoom,
                     self.crop_pan,
                 );
@@ -2225,6 +2388,7 @@ impl AssetpackBuilderForWonderdraft {
             canvas_rect.center() + self.crop_pan,
             fitted_rect.size() * self.crop_zoom,
         );
+        paint_checkerboard(&painter, image_rect, 14.0);
         painter.image(
             texture_id,
             image_rect,
@@ -2640,7 +2804,9 @@ impl AssetpackBuilderForWonderdraft {
             self.sprite_tool
         };
         let wheel_adjust_binding = match effective_tool {
-            SpriteTool::Erase => self.settings.shortcuts.sprite_erase_wheel_adjust,
+            SpriteTool::Erase | SpriteTool::ErasePickedColor => {
+                self.settings.shortcuts.sprite_erase_wheel_adjust
+            }
             SpriteTool::Restore => self.settings.shortcuts.sprite_restore_wheel_adjust,
             SpriteTool::PickColor => self.settings.shortcuts.sprite_pick_tolerance_wheel_adjust,
         };
@@ -2670,11 +2836,11 @@ impl AssetpackBuilderForWonderdraft {
         let old_erase_size = self.erase_brush_size;
         let old_restore_size = self.restore_brush_size;
         let old_tolerance = self.tolerance;
-        if pointer_over_image {
+        if viewer_wheel_enabled(self.settings_open, pointer_over_canvas) {
             if adjust_scroll.abs() > f32::EPSILON {
                 let direction = adjust_scroll.signum();
                 match effective_tool {
-                    SpriteTool::Erase => {
+                    SpriteTool::Erase | SpriteTool::ErasePickedColor => {
                         self.erase_brush_size =
                             (self.erase_brush_size + direction * 2.0).clamp(1.0, 300.0);
                     }
@@ -2713,8 +2879,9 @@ impl AssetpackBuilderForWonderdraft {
             && WHEEL_DEBUG
         {
             eprintln!(
-                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
+                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
                 response.hovered(),
+                self.settings_open,
                 self.sprite_zoom,
                 self.sprite_pan,
                 self.erase_brush_size,
@@ -3083,6 +3250,10 @@ impl AssetpackBuilderForWonderdraft {
         let brush_mode = match effective_tool {
             SpriteTool::Erase => BrushMode::Erase,
             SpriteTool::Restore => BrushMode::Restore,
+            SpriteTool::ErasePickedColor => BrushMode::ErasePickedColor {
+                picked: self.picked_color,
+                tolerance: self.tolerance,
+            },
             SpriteTool::PickColor => return,
         };
         let radius_pixels = self.active_brush_size(effective_tool).unwrap_or(1.0) * 0.5;
@@ -3157,7 +3328,13 @@ impl AssetpackBuilderForWonderdraft {
             .default_size(230.0)
             .show(root_ui, |ui| {
                 ui.heading("Themes");
-                if ui.button("New theme from template").clicked() {
+                if ui
+                    .button("New theme from template")
+                    .on_hover_text(
+                        "Create an editable Wonderdraft theme from the built-in template.",
+                    )
+                    .clicked()
+                {
                     self.themes.push(ThemeDraft::default());
                     self.selected_theme = self.themes.len() - 1;
                 }
@@ -3196,10 +3373,22 @@ impl AssetpackBuilderForWonderdraft {
                     "Edit every Wonderdraft theme property as JSON. Export validates and pretty-prints the file.",
                 );
                 ui.horizontal(|ui| {
-                    validate = ui.button("Validate JSON").clicked();
-                    pretty = ui.button("Pretty format").clicked();
-                    duplicate = ui.button("Duplicate").clicked();
-                    delete = ui.button("Delete").clicked();
+                    validate = ui
+                        .button("Validate JSON")
+                        .on_hover_text("Check that the theme text is valid JSON.")
+                        .clicked();
+                    pretty = ui
+                        .button("Pretty format")
+                        .on_hover_text("Indent and format the theme JSON.")
+                        .clicked();
+                    duplicate = ui
+                        .button("Duplicate")
+                        .on_hover_text("Create a copy of this theme.")
+                        .clicked();
+                    delete = ui
+                        .button("Delete")
+                        .on_hover_text("Delete this theme when another theme remains.")
+                        .clicked();
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -3362,6 +3551,9 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
 
     if response.hovered() {
         let scroll = ui.input(mouse_wheel_delta);
+        // Prevent the surrounding settings ScrollArea from moving, including on
+        // inertial frames where there is smooth scrolling but no new wheel event.
+        ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         if scroll.abs() > f32::EPSILON {
             let current = value.to_f64();
             let next = match wheel {
@@ -3379,7 +3571,6 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
                     response.hovered(),
                 );
             }
-            ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         }
     }
     response
@@ -3402,7 +3593,7 @@ fn path_setting_row(ui: &mut egui::Ui, path: &mut Option<PathBuf>, dialog_title:
                 Some(PathBuf::from(text.trim()))
             };
         }
-        if ui.button("Choose…").clicked() {
+        if ui.button("Choose…").on_hover_text(dialog_title).clicked() {
             let mut dialog = rfd::FileDialog::new().set_title(dialog_title);
             if let Some(current) = path.as_ref().filter(|path| path.exists()) {
                 dialog = dialog.set_directory(current);
@@ -3445,12 +3636,14 @@ fn shortcut_setting_row(
                 } else {
                     "Change…"
                 })
+                .on_hover_text("Capture a new key or modifier binding for this action.")
                 .clicked()
             {
                 *capture = if changing { None } else { Some(id) };
             }
             if ui
                 .add_enabled(*binding != default, egui::Button::new("Reset"))
+                .on_hover_text("Restore the default binding for this action.")
                 .clicked()
             {
                 *binding = default;
@@ -3494,6 +3687,10 @@ fn zoom_at_pointer(
     let old_center = canvas_center + *pan;
     *pan += (pointer - old_center) * (1.0 - actual_factor);
     *zoom = new_zoom;
+}
+
+fn viewer_wheel_enabled(settings_open: bool, pointer_over_canvas: bool) -> bool {
+    !settings_open && pointer_over_canvas
 }
 
 fn paint_shadowed_rect_stroke(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
@@ -4293,6 +4490,16 @@ mod tests {
 
         assert_eq!(zoom, 40.0);
         assert_eq!(adjustment, 0.0);
+    }
+
+    #[test]
+    fn viewer_wheel_uses_canvas_even_when_image_is_smaller_than_it() {
+        assert!(viewer_wheel_enabled(false, true));
+    }
+
+    #[test]
+    fn viewer_wheel_is_blocked_while_settings_are_open() {
+        assert!(!viewer_wheel_enabled(true, true));
     }
 
     #[test]

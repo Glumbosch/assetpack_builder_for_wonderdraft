@@ -71,9 +71,10 @@ Privacy & Security on first launch.
 - Wonderdraft directory export with duplicate-name and invalid-theme checks.
 - Automatic Wonderdraft installation-folder discovery from `config.ini` on Linux, Windows, and macOS.
 - One-click **Install asset pack**, honoring Wonderdraft's `custom_assets_directory` override and offering a folder picker when automatic discovery is unavailable.
-- Persistent settings for Dark/Light appearance, the install directory, default pack name, default export directory, and exporting without another directory prompt. SVG symbols follow the active text color.
+- Persistent settings for Dark/Light appearance, the install directory, default pack name, default export directory, and exporting without another directory prompt. SVG symbols follow the active text color, and primary controls provide contextual hover tooltips.
 - Settings displays the package version, unique build ID, build profile, build timestamp, and running executable path.
 - Double-click a sprite-list name to edit it inline and update its PNG/metadata name at the same time.
+- Transparent source-image and sprite pixels are shown over a checkerboard.
 
 ## Typical workflow
 
@@ -82,7 +83,7 @@ Privacy & Security on first launch.
 3. Choose **Draw crop** and drag around every sprite contained in the source image.
 4. Use **Select / move / resize** to move a crop or drag one of its eight handles.
 5. Use **Copy crop** for repeated layouts, then extract one crop, double-click it, or click **Extract all crops as sprites**. Double-clicking an already extracted crop opens its sprite.
-6. Switch among **Erase**, **Restore**, and **Pick color** in the sprite editor.
+6. Switch among the icon-based **Erase**, **Restore**, **Pick color**, and **Erase picked color** tools in the sprite editor. Hover an icon for its explanation.
 7. Zoom with the wheel or zoom slider, pan with the middle mouse button, and reset with **Fit**.
 8. Drag the red pivot marker to set offsets, or drag the orange circle to set the radius.
 9. Assign the asset type, category, name, draw mode, radius, and offsets.
@@ -135,6 +136,7 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 | `F` | Fit the sprite and reset pan |
 | `[` / `]` | Decrease / increase the selected erase or restore brush diameter |
 | Hold `Ctrl` + mouse wheel with Erase selected | Change the erase-brush diameter |
+| Hold `Ctrl` + mouse wheel with Erase picked color selected | Change the erase-brush diameter |
 | Hold `Ctrl` + mouse wheel with Restore selected | Change the restore-brush diameter |
 | Hold `Ctrl` + mouse wheel in Pick color mode | Change the color/alpha tolerance |
 | `Ctrl/Cmd+Z` | Undo the last transparency or sprite-crop edit |
@@ -144,17 +146,17 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 
 | Workspace | Control | Action |
 | --- | --- | --- |
-| Crop and sprite | Mouse wheel while the pointer is over the image | Zoom toward the pointed image location; that location stays under the pointer |
+| Crop and sprite | Mouse wheel while the pointer is over the viewer | Zoom toward the pointed location, including below 1×; viewer zoom is disabled while Settings is open |
 | Crop and sprite | Middle-button drag | Pan the image |
 | Crop | Primary-button drag outside crops | Draw a crop |
 | Crop | Primary-button drag inside a crop / on a crop handle | Move / resize the crop |
 | Crop | Double-click a crop | Extract it if needed, then open and select its sprite |
-| Sprite | Primary-button click or drag | Apply the active erase, restore, or pick-color tool |
+| Sprite | Primary-button click or drag | Apply Erase, Restore, or Erase picked color; Pick color samples on click |
 | Sprite while holding `Alt/Option` | Primary-button drag on a corner or edge marker | Shrink or enlarge the sprite crop within the source image; the linked crop in the Crop workspace updates too |
-| Any slider | Mouse wheel while hovered | Increase or decrease the slider value |
+| Any slider | Mouse wheel while hovered | Increase or decrease the slider value without scrolling its surrounding panel |
 | Any focused slider | Arrow Left/Right | Decrease or increase the slider value |
 
-The three Ctrl+mouse-wheel modifiers are editable independently under **Settings → Keyboard shortcuts**, alongside the other shortcuts. Crop edges and radius handles use matching resize cursors; moving crop regions or sprite pivots uses the four-direction move cursor.
+The Erase picked color brush uses the Erase diameter and only removes pixels whose RGB color is within the picked-color/alpha tolerance. Click the picked-color rectangle to open a full visual color picker with numeric RGB entry. The three Ctrl+mouse-wheel modifiers are editable independently under **Settings → Keyboard shortcuts**, alongside the other shortcuts. Crop edges and radius handles use matching resize cursors; moving crop regions or sprite pivots uses the four-direction move cursor.
 
 Wheel input prints diagnostic lines to the launching terminal. `[wheel-debug][raw]` shows the event received from the window system, while `[crop-route]`, `[sprite-route]`, and `[slider-route]` show where it was routed and the before/after values. The app also prints `[build-info]` at startup. Compare it with **Settings → Build information** when checking that the intended executable is running.
 

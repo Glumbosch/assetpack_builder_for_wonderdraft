@@ -13,6 +13,7 @@ pub fn load_oriented_rgba(path: &Path) -> ImageResult<RgbaImage> {
 pub enum BrushMode {
     Erase,
     Restore,
+    ErasePickedColor { picked: [u8; 3], tolerance: u8 },
 }
 
 #[inline]
@@ -107,15 +108,19 @@ pub fn smart_edge_remove(image: &mut RgbaImage, tolerance: u8) -> usize {
 }
 
 pub fn remove_picked_color(image: &mut RgbaImage, picked: [u8; 3], tolerance: u8) -> usize {
-    let tol = tolerance as f32 * 1.73;
     let mut count = 0usize;
     for pixel in image.pixels_mut() {
-        if color_distance_rgb(pixel, picked) <= tol {
+        if matches_picked_color(pixel, picked, tolerance) {
             pixel[3] = 0;
             count += 1;
         }
     }
     count
+}
+
+#[inline]
+fn matches_picked_color(pixel: &Rgba<u8>, picked: [u8; 3], tolerance: u8) -> bool {
+    color_distance_rgb(pixel, picked) <= tolerance as f32 * 1.73
 }
 
 pub fn soften_alpha(image: &mut RgbaImage, radius: u32) {
@@ -211,6 +216,11 @@ pub fn apply_brush_stamp(
                 match mode {
                     BrushMode::Erase => image.get_pixel_mut(x, y)[3] = 0,
                     BrushMode::Restore => *image.get_pixel_mut(x, y) = *original.get_pixel(x, y),
+                    BrushMode::ErasePickedColor { picked, tolerance } => {
+                        if matches_picked_color(image.get_pixel(x, y), picked, tolerance) {
+                            image.get_pixel_mut(x, y)[3] = 0;
+                        }
+                    }
                 }
             }
         }
@@ -260,6 +270,27 @@ mod tests {
         working.get_pixel_mut(1, 1)[3] = 0;
         apply_brush_stamp(&mut working, &original, 1.5, 1.5, 1.0, BrushMode::Restore);
         assert_eq!(*working.get_pixel(1, 1), Rgba([10, 20, 30, 200]));
+    }
+
+    #[test]
+    fn picked_color_brush_only_erases_matching_pixels_inside_stamp() {
+        let original = RgbaImage::from_pixel(3, 1, Rgba([255, 255, 255, 255]));
+        let mut working = original.clone();
+        working.put_pixel(1, 0, Rgba([10, 20, 30, 255]));
+        apply_brush_stamp(
+            &mut working,
+            &original,
+            1.5,
+            0.5,
+            2.0,
+            BrushMode::ErasePickedColor {
+                picked: [255, 255, 255],
+                tolerance: 0,
+            },
+        );
+        assert_eq!(working.get_pixel(0, 0)[3], 0);
+        assert_eq!(working.get_pixel(1, 0)[3], 255);
+        assert_eq!(working.get_pixel(2, 0)[3], 0);
     }
 
     #[test]
