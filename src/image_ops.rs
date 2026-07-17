@@ -1,8 +1,22 @@
 use image::{imageops, DynamicImage, ImageDecoder, ImageReader, ImageResult, Rgba, RgbaImage};
-use std::{collections::VecDeque, path::Path};
+use std::{collections::VecDeque, fs::File, io::BufReader, path::Path};
 
 pub fn load_oriented_rgba(path: &Path) -> ImageResult<RgbaImage> {
-    let mut decoder = ImageReader::open(path)?.into_decoder()?;
+    let extension_result = decode_oriented_rgba(ImageReader::open(path)?);
+    match extension_result {
+        Ok(image) => Ok(image),
+        Err(extension_error) => {
+            eprintln!(
+                "[image-load] extension-based decode failed for {}; retrying from file signature: {extension_error}",
+                path.display(),
+            );
+            decode_oriented_rgba(ImageReader::open(path)?.with_guessed_format()?)
+        }
+    }
+}
+
+fn decode_oriented_rgba(reader: ImageReader<BufReader<File>>) -> ImageResult<RgbaImage> {
+    let mut decoder = reader.into_decoder()?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
@@ -238,6 +252,29 @@ pub fn crop_rgba(image: &RgbaImage, x: u32, y: u32, width: u32, height: u32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{codecs::webp::WebPEncoder, ExtendedColorType};
+    use std::fs;
+
+    #[test]
+    fn loader_detects_webp_content_with_png_extension() {
+        let path = std::env::temp_dir().join(format!(
+            "assetpack-builder-mislabeled-webp-{}.png",
+            std::process::id()
+        ));
+        let expected = [12, 34, 56, 255];
+        let mut encoded = Vec::new();
+        WebPEncoder::new_lossless(&mut encoded)
+            .encode(&expected, 1, 1, ExtendedColorType::Rgba8)
+            .expect("encode test WebP");
+        fs::write(&path, encoded).expect("write mislabeled test image");
+
+        let loaded = load_oriented_rgba(&path).expect("detect WebP signature after PNG failure");
+        let cleanup = fs::remove_file(&path);
+
+        assert_eq!(loaded.dimensions(), (1, 1));
+        assert_eq!(loaded.get_pixel(0, 0).0, expected);
+        cleanup.expect("remove test image");
+    }
 
     #[test]
     fn smart_edge_only_removes_connected_background() {

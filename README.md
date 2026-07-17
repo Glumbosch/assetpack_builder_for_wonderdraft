@@ -33,7 +33,7 @@ Privacy & Security on first launch.
 
 ## Implemented features
 
-- Import one or many PNG, JPEG, WebP, BMP, or TIFF images.
+- Import one or many PNG, JPEG, WebP, BMP, or TIFF images. If an extension is incorrect, the loader retries using the file's content signature.
 - Separate source-image and extracted-sprite import buttons and drop areas. Images dropped on the sprite area are imported as complete, uncropped sprites.
 - Crop rows use a photo-share symbol when a sprite has been extracted, and sprite rows use draw-mode symbols instead of mode text.
 - Drag a source-image row onto the extracted-sprite area to extract the complete image.
@@ -118,6 +118,7 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 | `C` | Select the Draw crop tool |
 | `V` | Select the Select/move/resize tool |
 | `F` | Fit the source image and reset pan |
+| `+` / `-` | Zoom in / zoom out |
 | `Enter` | Extract the selected crop as a sprite |
 | `Ctrl/Cmd+C` | Copy the selected crop |
 | `Escape` | Cancel the current draw, move, or resize interaction |
@@ -134,6 +135,7 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 | Hold `Shift` | Hide and disable the pivot and radius handles; erase/restore clicks pass through normally |
 | Hold `Alt/Option` | Show sprite crop handles and enable crop resizing |
 | `F` | Fit the sprite and reset pan |
+| `+` / `-` | Zoom in / zoom out |
 | `[` / `]` | Decrease / increase the selected erase or restore brush diameter |
 | Hold `Ctrl` + mouse wheel with Erase selected | Change the erase-brush diameter |
 | Hold `Ctrl` + mouse wheel with Erase picked color selected | Change the erase-brush diameter |

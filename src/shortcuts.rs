@@ -157,6 +157,8 @@ pub struct ShortcutSettings {
     pub crop_draw_tool: ShortcutBinding,
     pub crop_select_tool: ShortcutBinding,
     pub crop_fit: ShortcutBinding,
+    pub crop_zoom_in: ShortcutBinding,
+    pub crop_zoom_out: ShortcutBinding,
     pub crop_extract: ShortcutBinding,
     pub crop_copy: ShortcutBinding,
     pub crop_cancel: ShortcutBinding,
@@ -174,6 +176,8 @@ pub struct ShortcutSettings {
     pub sprite_crop_mode: ShortcutBinding,
     pub sprite_hide_overlays: ShortcutBinding,
     pub sprite_fit: ShortcutBinding,
+    pub sprite_zoom_in: ShortcutBinding,
+    pub sprite_zoom_out: ShortcutBinding,
     pub sprite_brush_smaller: ShortcutBinding,
     pub sprite_brush_larger: ShortcutBinding,
     pub sprite_erase_wheel_adjust: ShortcutBinding,
@@ -222,6 +226,8 @@ impl Default for ShortcutSettings {
             crop_draw_tool: ShortcutBinding::plain(Key::C),
             crop_select_tool: ShortcutBinding::plain(Key::V),
             crop_fit: ShortcutBinding::plain(Key::F),
+            crop_zoom_in: ShortcutBinding::plain(Key::Plus),
+            crop_zoom_out: ShortcutBinding::plain(Key::Minus),
             crop_extract: ShortcutBinding::plain(Key::Enter),
             crop_copy: ShortcutBinding::key(command, Key::C),
             crop_cancel: ShortcutBinding::plain(Key::Escape),
@@ -239,6 +245,8 @@ impl Default for ShortcutSettings {
             sprite_crop_mode: ShortcutBinding::modifier(ModifierKey::Alt),
             sprite_hide_overlays: ShortcutBinding::modifier(ModifierKey::Shift),
             sprite_fit: ShortcutBinding::plain(Key::F),
+            sprite_zoom_in: ShortcutBinding::plain(Key::Plus),
+            sprite_zoom_out: ShortcutBinding::plain(Key::Minus),
             sprite_brush_smaller: ShortcutBinding::plain(Key::OpenBracket),
             sprite_brush_larger: ShortcutBinding::plain(Key::CloseBracket),
             sprite_erase_wheel_adjust: ShortcutBinding::modifier(ModifierKey::Control),
@@ -258,6 +266,10 @@ mod tests {
     fn shortcut_settings_deserialize_from_an_empty_legacy_object() {
         let settings: ShortcutSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, ShortcutSettings::default());
+        assert_eq!(settings.crop_zoom_in, ShortcutBinding::plain(Key::Plus));
+        assert_eq!(settings.crop_zoom_out, ShortcutBinding::plain(Key::Minus));
+        assert_eq!(settings.sprite_zoom_in, ShortcutBinding::plain(Key::Plus));
+        assert_eq!(settings.sprite_zoom_out, ShortcutBinding::plain(Key::Minus));
     }
 
     #[test]

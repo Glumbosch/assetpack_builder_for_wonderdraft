@@ -158,6 +158,8 @@ struct SpriteOverlay {
 
 const SPRITE_PIVOT_HIT_RADIUS: f32 = 24.0;
 const WHEEL_DEBUG: bool = true;
+const ZOOM_MIN: f32 = 0.1;
+const ZOOM_MAX: f32 = 12.0;
 
 #[derive(Debug, Clone)]
 struct SourceDragPayload(u64);
@@ -213,6 +215,9 @@ pub struct AssetpackBuilderForWonderdraft {
     sprite_canvas_drop_rect: Option<Rect>,
     file_drop_target: Option<FileDropTarget>,
     status: String,
+    zoom_debug_pass: u64,
+    zoom_debug_last_crop: f32,
+    zoom_debug_last_sprite: f32,
 }
 
 impl Default for AssetpackBuilderForWonderdraft {
@@ -269,6 +274,9 @@ impl AssetpackBuilderForWonderdraft {
             sprite_canvas_drop_rect: None,
             file_drop_target: None,
             status: "Import images or drop them into a source or sprite area.".to_owned(),
+            zoom_debug_pass: 0,
+            zoom_debug_last_crop: 1.0,
+            zoom_debug_last_sprite: 1.0,
         }
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -327,6 +335,99 @@ impl AssetpackBuilderForWonderdraft {
             SpriteTool::PickColor => return,
         };
         *brush_size = (*brush_size + amount).clamp(1.0, 300.0);
+    }
+
+    fn set_crop_zoom(&mut self, zoom: f32, reason: &'static str) {
+        let old_zoom = self.crop_zoom;
+        self.crop_zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        let outside_bounds = !(ZOOM_MIN..=ZOOM_MAX).contains(&zoom);
+        if WHEEL_DEBUG && ((self.crop_zoom - old_zoom).abs() > f32::EPSILON || outside_bounds) {
+            eprintln!(
+                "[zoom-debug][write] pass={} target=crop reason={reason:?} old={old_zoom:.9} requested={zoom:.9} result={:.9} old_bits=0x{:08x} requested_bits=0x{:08x} result_bits=0x{:08x} min_clamped={} max_clamped={} pan={:?}",
+                self.zoom_debug_pass,
+                self.crop_zoom,
+                old_zoom.to_bits(),
+                zoom.to_bits(),
+                self.crop_zoom.to_bits(),
+                zoom < ZOOM_MIN,
+                zoom > ZOOM_MAX,
+                self.crop_pan,
+            );
+        }
+    }
+
+    fn set_sprite_zoom(&mut self, zoom: f32, reason: &'static str) {
+        let old_zoom = self.sprite_zoom;
+        self.sprite_zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        let outside_bounds = !(ZOOM_MIN..=ZOOM_MAX).contains(&zoom);
+        if WHEEL_DEBUG && ((self.sprite_zoom - old_zoom).abs() > f32::EPSILON || outside_bounds) {
+            eprintln!(
+                "[zoom-debug][write] pass={} target=sprite reason={reason:?} old={old_zoom:.9} requested={zoom:.9} result={:.9} old_bits=0x{:08x} requested_bits=0x{:08x} result_bits=0x{:08x} min_clamped={} max_clamped={} pan={:?}",
+                self.zoom_debug_pass,
+                self.sprite_zoom,
+                old_zoom.to_bits(),
+                zoom.to_bits(),
+                self.sprite_zoom.to_bits(),
+                zoom < ZOOM_MIN,
+                zoom > ZOOM_MAX,
+                self.sprite_pan,
+            );
+        }
+    }
+
+    fn set_crop_view(&mut self, zoom: f32, pan: Vec2, reason: &'static str) {
+        let old_zoom = self.crop_zoom;
+        let old_pan = self.crop_pan;
+        self.crop_zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        self.crop_pan = pan;
+        if WHEEL_DEBUG
+            && ((self.crop_zoom - old_zoom).abs() > f32::EPSILON || self.crop_pan != old_pan)
+        {
+            eprintln!(
+                "[zoom-debug][write] pass={} target=crop reason={reason:?} zoom={old_zoom:.6}->{:.6} pan={old_pan:?}->{:?}",
+                self.zoom_debug_pass, self.crop_zoom, self.crop_pan,
+            );
+        }
+    }
+
+    fn set_sprite_view(&mut self, zoom: f32, pan: Vec2, reason: &'static str) {
+        let old_zoom = self.sprite_zoom;
+        let old_pan = self.sprite_pan;
+        self.sprite_zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        self.sprite_pan = pan;
+        if WHEEL_DEBUG
+            && ((self.sprite_zoom - old_zoom).abs() > f32::EPSILON || self.sprite_pan != old_pan)
+        {
+            eprintln!(
+                "[zoom-debug][write] pass={} target=sprite reason={reason:?} zoom={old_zoom:.6}->{:.6} pan={old_pan:?}->{:?}",
+                self.zoom_debug_pass, self.sprite_zoom, self.sprite_pan,
+            );
+        }
+    }
+
+    fn trace_zoom_checkpoint(&mut self, ctx: &egui::Context, checkpoint: &'static str) {
+        if !WHEEL_DEBUG {
+            return;
+        }
+        let crop_delta = self.crop_zoom - self.zoom_debug_last_crop;
+        let sprite_delta = self.sprite_zoom - self.zoom_debug_last_sprite;
+        if crop_delta.abs() > f32::EPSILON || sprite_delta.abs() > f32::EPSILON {
+            let focused = ctx.memory(|memory| memory.focused());
+            let wants_keyboard = ctx.egui_wants_keyboard_input();
+            let (pointer, event_count) =
+                ctx.input(|input| (input.pointer.hover_pos(), input.events.len()));
+            eprintln!(
+                "[zoom-debug][checkpoint] pass={} checkpoint={checkpoint:?} tab={:?} view={:?} crop={:.6} delta={crop_delta:+.6} sprite={:.6} delta={sprite_delta:+.6} pointer={pointer:?} focused={focused:?} wants_keyboard={wants_keyboard} settings_open={} events={event_count}",
+                self.zoom_debug_pass,
+                self.main_tab,
+                self.asset_view,
+                self.crop_zoom,
+                self.sprite_zoom,
+                self.settings_open,
+            );
+        }
+        self.zoom_debug_last_crop = self.crop_zoom;
+        self.zoom_debug_last_sprite = self.sprite_zoom;
     }
 
     fn sync_sprite_crop_to_source(&mut self, sprite_index: usize) {
@@ -398,8 +499,7 @@ impl AssetpackBuilderForWonderdraft {
                     self.selected_crop = None;
                     self.asset_view = AssetView::Crop;
                     self.crop_tool = CropTool::Draw;
-                    self.crop_zoom = 1.0;
-                    self.crop_pan = Vec2::ZERO;
+                    self.set_crop_view(1.0, Vec2::ZERO, "source image imported");
                     imported += 1;
                 }
                 Err(error) => errors.push(format!("{}: {error}", path.display())),
@@ -558,17 +658,25 @@ impl AssetpackBuilderForWonderdraft {
                         modifiers,
                         phase,
                     } => eprintln!(
-                        "[wheel-debug][raw] tab={:?} view={:?} unit={unit:?} delta={delta:?} modifiers={modifiers:?} phase={phase:?} pointer={:?} smooth={:?} zoom_delta={:.4}",
+                        "[wheel-debug][raw] pass={} tab={:?} view={:?} crop_zoom={:.6} crop_pan={:?} sprite_zoom={:.6} sprite_pan={:?} unit={unit:?} delta={delta:?} modifiers={modifiers:?} phase={phase:?} pointer={:?} smooth={:?} zoom_delta={:.4}",
+                        self.zoom_debug_pass,
                         self.main_tab,
                         self.asset_view,
+                        self.crop_zoom,
+                        self.crop_pan,
+                        self.sprite_zoom,
+                        self.sprite_pan,
                         input.pointer.hover_pos(),
                         input.smooth_scroll_delta,
                         input.zoom_delta(),
                     ),
                     egui::Event::Zoom(factor) => eprintln!(
-                        "[wheel-debug][raw-zoom] tab={:?} view={:?} factor={factor:.4} pointer={:?}",
+                        "[wheel-debug][raw-zoom] pass={} tab={:?} view={:?} crop_zoom={:.6} sprite_zoom={:.6} factor={factor:.4} pointer={:?}",
+                        self.zoom_debug_pass,
                         self.main_tab,
                         self.asset_view,
+                        self.crop_zoom,
+                        self.sprite_zoom,
                         input.pointer.hover_pos(),
                     ),
                     _ => {}
@@ -701,8 +809,13 @@ impl AssetpackBuilderForWonderdraft {
             self.status = "Transparency tool: Restore.".to_owned();
         }
         if pressed(shortcuts.sprite_fit) {
-            self.sprite_zoom = 1.0;
-            self.sprite_pan = Vec2::ZERO;
+            self.set_sprite_view(1.0, Vec2::ZERO, "sprite fit shortcut");
+        }
+        if pressed(shortcuts.sprite_zoom_in) {
+            self.set_sprite_zoom(self.sprite_zoom * 1.1, "sprite zoom-in shortcut");
+        }
+        if pressed(shortcuts.sprite_zoom_out) {
+            self.set_sprite_zoom(self.sprite_zoom / 1.1, "sprite zoom-out shortcut");
         }
         if pressed(shortcuts.sprite_brush_smaller) {
             self.adjust_active_brush_size(-2.0);
@@ -742,8 +855,13 @@ impl AssetpackBuilderForWonderdraft {
             self.crop_tool = CropTool::SelectMove;
         }
         if pressed(shortcuts.crop_fit) {
-            self.crop_zoom = 1.0;
-            self.crop_pan = Vec2::ZERO;
+            self.set_crop_view(1.0, Vec2::ZERO, "crop fit shortcut");
+        }
+        if pressed(shortcuts.crop_zoom_in) {
+            self.set_crop_zoom(self.crop_zoom * 1.1, "crop zoom-in shortcut");
+        }
+        if pressed(shortcuts.crop_zoom_out) {
+            self.set_crop_zoom(self.crop_zoom / 1.1, "crop zoom-out shortcut");
         }
         if pressed(shortcuts.crop_extract) {
             self.extract_selected_crop();
@@ -916,10 +1034,8 @@ impl AssetpackBuilderForWonderdraft {
         self.crop_tool = CropTool::SelectMove;
         self.crop_drag_start = None;
         self.crop_drag_current = None;
-        self.crop_zoom = 1.0;
-        self.crop_pan = Vec2::ZERO;
-        self.sprite_zoom = 1.0;
-        self.sprite_pan = Vec2::ZERO;
+        self.set_crop_view(1.0, Vec2::ZERO, "project loaded");
+        self.set_sprite_view(1.0, Vec2::ZERO, "project loaded");
         self.sprite_overlay_drag = None;
         self.sprite_crop_drag = None;
         self.crop_drag = None;
@@ -1096,8 +1212,7 @@ impl AssetpackBuilderForWonderdraft {
         self.sources[source_index].crops[crop_index].sprite_id = Some(sprite_id);
         self.selected_sprite = Some(sprite_id);
         self.asset_view = AssetView::Sprite;
-        self.sprite_zoom = 1.0;
-        self.sprite_pan = Vec2::ZERO;
+        self.set_sprite_view(1.0, Vec2::ZERO, "crop extracted");
         self.status = "Extracted crop as a new independently editable sprite.".to_owned();
     }
 
@@ -1171,8 +1286,7 @@ impl AssetpackBuilderForWonderdraft {
         if let Some(sprite_id) = last_sprite {
             self.selected_sprite = Some(sprite_id);
             self.asset_view = AssetView::Sprite;
-            self.sprite_zoom = 1.0;
-            self.sprite_pan = Vec2::ZERO;
+            self.set_sprite_view(1.0, Vec2::ZERO, "all crops extracted");
         }
         self.status = format!("Extracted {extracted} crop(s) as sprites.");
     }
@@ -1415,6 +1529,8 @@ impl AssetpackBuilderForWonderdraft {
                         shortcut_row!("Draw-crop tool", crop_draw_tool);
                         shortcut_row!("Select/move tool", crop_select_tool);
                         shortcut_row!("Fit image", crop_fit);
+                        shortcut_row!("Zoom in", crop_zoom_in);
+                        shortcut_row!("Zoom out", crop_zoom_out);
                         shortcut_row!("Extract selected crop", crop_extract);
                         shortcut_row!("Copy selected crop", crop_copy);
                         shortcut_row!("Cancel current crop interaction", crop_cancel);
@@ -1434,6 +1550,8 @@ impl AssetpackBuilderForWonderdraft {
                         shortcut_row!("Temporarily crop sprite", sprite_crop_mode);
                         shortcut_row!("Hide pivot/radius overlays", sprite_hide_overlays);
                         shortcut_row!("Fit image", sprite_fit);
+                        shortcut_row!("Zoom in", sprite_zoom_in);
+                        shortcut_row!("Zoom out", sprite_zoom_out);
                         shortcut_row!("Decrease brush diameter", sprite_brush_smaller);
                         shortcut_row!("Increase brush diameter", sprite_brush_larger);
                         shortcut_row!(
@@ -1557,11 +1675,14 @@ impl AssetpackBuilderForWonderdraft {
 
     fn assets_ui(&mut self, root_ui: &mut egui::Ui) {
         self.asset_left_panel(root_ui);
+        self.trace_zoom_checkpoint(root_ui.ctx(), "after asset-left panel");
         self.asset_right_panel(root_ui);
+        self.trace_zoom_checkpoint(root_ui.ctx(), "after asset-right panel");
         egui::CentralPanel::default().show(root_ui, |ui| match self.asset_view {
             AssetView::Crop => self.crop_canvas(ui),
             AssetView::Sprite => self.sprite_canvas(ui),
         });
+        self.trace_zoom_checkpoint(root_ui.ctx(), "after asset canvas");
     }
 
     fn asset_left_panel(&mut self, root_ui: &mut egui::Ui) {
@@ -1655,8 +1776,7 @@ impl AssetpackBuilderForWonderdraft {
                             .and_then(|index| self.sources[index].crops.first())
                             .map(|crop| crop.id);
                         self.asset_view = AssetView::Crop;
-                        self.crop_zoom = 1.0;
-                        self.crop_pan = Vec2::ZERO;
+                        self.set_crop_view(1.0, Vec2::ZERO, "source selected");
                     }
 
                     ui.separator();
@@ -1738,8 +1858,7 @@ impl AssetpackBuilderForWonderdraft {
                     if let Some(sprite_id) = sprite_clicked {
                         self.selected_sprite = Some(sprite_id);
                         self.asset_view = AssetView::Sprite;
-                        self.sprite_zoom = 1.0;
-                        self.sprite_pan = Vec2::ZERO;
+                        self.set_sprite_view(1.0, Vec2::ZERO, "sprite selected");
                         self.sprite_overlay_drag = None;
                         self.sprite_crop_drag = None;
                     }
@@ -1810,7 +1929,8 @@ impl AssetpackBuilderForWonderdraft {
         }
         ui.label(format!("Source: {source_w} × {source_h} px"));
         ui.horizontal(|ui| {
-            add_wheel_slider(
+            let old_zoom = self.crop_zoom;
+            let response = add_wheel_slider(
                 ui,
                 &mut self.crop_zoom,
                 0.1..=12.0,
@@ -1819,13 +1939,22 @@ impl AssetpackBuilderForWonderdraft {
                 true,
                 true,
             );
+            if WHEEL_DEBUG && (self.crop_zoom - old_zoom).abs() > f32::EPSILON {
+                eprintln!(
+                    "[zoom-debug][slider-write] pass={} target=crop hovered={} focused={} changed={} zoom={old_zoom:.6}->{:.6}",
+                    self.zoom_debug_pass,
+                    response.hovered(),
+                    response.has_focus(),
+                    response.changed(),
+                    self.crop_zoom,
+                );
+            }
             if ui
                 .button("Fit")
                 .on_hover_text("Fit the complete source image in the viewer.")
                 .clicked()
             {
-                self.crop_zoom = 1.0;
-                self.crop_pan = Vec2::ZERO;
+                self.set_crop_view(1.0, Vec2::ZERO, "crop Fit button");
             }
         });
         if ui
@@ -1994,7 +2123,8 @@ impl AssetpackBuilderForWonderdraft {
         };
 
         ui.horizontal(|ui| {
-            add_wheel_slider(
+            let old_zoom = self.sprite_zoom;
+            let response = add_wheel_slider(
                 ui,
                 &mut self.sprite_zoom,
                 0.1..=12.0,
@@ -2003,13 +2133,22 @@ impl AssetpackBuilderForWonderdraft {
                 true,
                 true,
             );
+            if WHEEL_DEBUG && (self.sprite_zoom - old_zoom).abs() > f32::EPSILON {
+                eprintln!(
+                    "[zoom-debug][slider-write] pass={} target=sprite hovered={} focused={} changed={} zoom={old_zoom:.6}->{:.6}",
+                    self.zoom_debug_pass,
+                    response.hovered(),
+                    response.has_focus(),
+                    response.changed(),
+                    self.sprite_zoom,
+                );
+            }
             if ui
                 .button("Fit")
                 .on_hover_text("Fit the complete sprite in the viewer.")
                 .clicked()
             {
-                self.sprite_zoom = 1.0;
-                self.sprite_pan = Vec2::ZERO;
+                self.set_sprite_view(1.0, Vec2::ZERO, "sprite Fit button");
             }
         });
         ui.label(
@@ -2394,9 +2533,12 @@ impl AssetpackBuilderForWonderdraft {
             }
             if WHEEL_DEBUG {
                 eprintln!(
-                    "[wheel-debug][crop-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} wheel_points={scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?}",
+                    "[wheel-debug][crop-route] pass={} response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} wheel_points={scroll:.3} gesture_zoom={gesture_zoom:.4} fitted_size={:?} displayed_size={:?} zoom={old_zoom:.6}->{:.6} pan={old_pan:?}->{:?}",
+                    self.zoom_debug_pass,
                     response.hovered(),
                     self.settings_open,
+                    fitted_rect.size(),
+                    image_rect.size(),
                     self.crop_zoom,
                     self.crop_pan,
                 );
@@ -2923,9 +3065,12 @@ impl AssetpackBuilderForWonderdraft {
             && WHEEL_DEBUG
         {
             eprintln!(
-                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} ctrl={control_down} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
+                "[wheel-debug][sprite-route] pass={} response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} ctrl={control_down} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} fitted_size={:?} displayed_size={:?} zoom={old_zoom:.6}->{:.6} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
+                self.zoom_debug_pass,
                 response.hovered(),
                 self.settings_open,
+                fitted_rect.size(),
+                image_rect.size(),
                 self.sprite_zoom,
                 self.sprite_pan,
                 self.erase_brush_size,
@@ -3485,9 +3630,12 @@ impl AssetpackBuilderForWonderdraft {
 impl eframe::App for AssetpackBuilderForWonderdraft {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.zoom_debug_pass = self.zoom_debug_pass.wrapping_add(1);
+        self.trace_zoom_checkpoint(&ctx, "ui start");
         self.debug_wheel_events(&ctx);
         self.handle_dropped_files(&ctx);
         self.handle_shortcuts(&ctx);
+        self.trace_zoom_checkpoint(&ctx, "after shortcuts");
         self.source_drop_rect = None;
         self.sprite_drop_rect = None;
         self.source_canvas_drop_rect = None;
@@ -3499,7 +3647,9 @@ impl eframe::App for AssetpackBuilderForWonderdraft {
             MainTab::Themes => self.themes_ui(ui),
         }
         self.settings_window(&ctx);
+        self.trace_zoom_checkpoint(&ctx, "after settings window");
         self.paint_drop_overlay(&ctx);
+        self.trace_zoom_checkpoint(&ctx, "ui end");
     }
 }
 
@@ -3584,46 +3734,72 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
         SliderWheel::Linear(step) => step,
         SliderWheel::Multiplicative(_) => ((max - min) / 100.0).max(0.01),
     };
-    let mut slider = egui::Slider::new(value, range).step_by(keyboard_step);
-    if let Some(text) = text {
-        slider = slider.text(text);
-    }
-    if !show_value {
-        slider = slider.show_value(false);
-    }
-    if logarithmic {
-        slider = slider.logarithmic(true);
-    }
-    let mut response = ui.add(slider);
-    if response.clicked() || response.drag_started() {
-        response.request_focus();
-    }
+    // Render the numeric value as a read-only label. egui's built-in editable
+    // value can keep stale edit text focused and write it back on a later pass,
+    // undoing zoom changes made by either the canvas or the mouse wheel.
+    ui.horizontal(|ui| {
+        let mut slider = egui::Slider::new(value, range)
+            .step_by(keyboard_step)
+            .show_value(false);
+        if logarithmic {
+            slider = slider.logarithmic(true);
+        }
+        let mut response = ui.add(slider);
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+        }
 
-    if response.hovered() {
-        let scroll = ui.input(mouse_wheel_delta);
-        // Prevent the surrounding settings ScrollArea from moving, including on
-        // inertial frames where there is smooth scrolling but no new wheel event.
-        ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
-        if scroll.abs() > f32::EPSILON {
-            let current = value.to_f64();
-            let next = match wheel {
-                SliderWheel::Linear(step) => current + step.copysign(scroll as f64),
-                SliderWheel::Multiplicative(factor) if scroll > 0.0 => current * factor,
-                SliderWheel::Multiplicative(factor) => current / factor,
-            }
-            .clamp(min, max);
-            *value = T::from_f64(next);
-            response.mark_changed();
-            if WHEEL_DEBUG {
-                eprintln!(
-                    "[wheel-debug][slider-route] label={:?} response_hovered={} wheel_points={scroll:.3} value={current:.4}->{next:.4}",
-                    text,
-                    response.hovered(),
-                );
+        if response.hovered() {
+            let scroll = ui.input(mouse_wheel_delta);
+            // Prevent the surrounding settings ScrollArea from moving, including on
+            // inertial frames where there is smooth scrolling but no new wheel event.
+            ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            if scroll.abs() > f32::EPSILON {
+                let current = value.to_f64();
+                let next = match wheel {
+                    SliderWheel::Linear(step) => current + step.copysign(scroll as f64),
+                    SliderWheel::Multiplicative(factor) if scroll > 0.0 => current * factor,
+                    SliderWheel::Multiplicative(factor) => current / factor,
+                }
+                .clamp(min, max);
+                *value = T::from_f64(next);
+                response.mark_changed();
+                if WHEEL_DEBUG {
+                    eprintln!(
+                        "[wheel-debug][slider-route] label={:?} response_hovered={} wheel_points={scroll:.3} value={current:.12}->{next:.12} min={min:.12} max={max:.12} min_clamped={} max_clamped={}",
+                        text,
+                        response.hovered(),
+                        next <= min,
+                        next >= max,
+                    );
+                }
             }
         }
+
+        if show_value {
+            ui.monospace(slider_value_text(*value));
+        }
+        if let Some(text) = text {
+            ui.label(text);
+        }
+        response
+    })
+    .inner
+}
+
+fn slider_value_text<T: egui::emath::Numeric>(value: T) -> String {
+    if T::INTEGRAL {
+        format!("{:.0}", value.to_f64())
+    } else {
+        let mut text = format!("{:.3}", value.to_f64());
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+        text
     }
-    response
 }
 
 fn path_setting_row(ui: &mut egui::Ui, path: &mut Option<PathBuf>, dialog_title: &str) {
@@ -3729,7 +3905,18 @@ fn zoom_at_pointer(
     requested_factor: f32,
 ) {
     let old_zoom = *zoom;
-    let new_zoom = (old_zoom * requested_factor).clamp(0.1, 12.0);
+    let requested_zoom = old_zoom * requested_factor;
+    let new_zoom = requested_zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+    if WHEEL_DEBUG {
+        eprintln!(
+            "[zoom-debug][pointer-math] old={old_zoom:.9} factor={requested_factor:.9} requested={requested_zoom:.9} result={new_zoom:.9} old_bits=0x{:08x} requested_bits=0x{:08x} result_bits=0x{:08x} min_clamped={} max_clamped={}",
+            old_zoom.to_bits(),
+            requested_zoom.to_bits(),
+            new_zoom.to_bits(),
+            requested_zoom < ZOOM_MIN,
+            requested_zoom > ZOOM_MAX,
+        );
+    }
     if (new_zoom - old_zoom).abs() <= f32::EPSILON {
         return;
     }
@@ -4542,6 +4729,13 @@ mod tests {
 
         assert!((zoom - 0.4).abs() < f32::EPSILON);
         assert_eq!(pan, vec2(30.0, -20.0));
+    }
+
+    #[test]
+    fn slider_value_labels_are_stable_and_readable() {
+        assert_eq!(slider_value_text(24_u8), "24");
+        assert_eq!(slider_value_text(0.457_f32), "0.457");
+        assert_eq!(slider_value_text(1.0_f32), "1");
     }
 
     #[test]

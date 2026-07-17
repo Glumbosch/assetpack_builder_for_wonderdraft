@@ -1,6 +1,6 @@
 [package]
 name = "assetpack-builder-for-wonderdraft"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Native assetpack builder and sprite transparency editor for Wonderdraft"
 license = "MIT"
