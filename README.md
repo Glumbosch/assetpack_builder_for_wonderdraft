@@ -1,8 +1,33 @@
-# Wonderdraft Asset Studio
+# Assetpack Builder for Wonderdraft
+
+[![CI](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml/badge.svg)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/Glumbosch/assetpack_builder_for_wonderdraft)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A small native desktop application for preparing Wonderdraft asset packs from ordinary images and sprite sheets.
 
 It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, Python, or an embedded browser. Release builds are distributed as one executable per operating system.
+
+> This is an experimental, unofficial tool. Keep backups of source images and
+> project files, and inspect installed packs in Wonderdraft before relying on
+> them.
+
+This project is not affiliated with or endorsed by Wonderdraft or Megasploot.
+Wonderdraft and its bundled assets are not distributed with this project.
+
+## AI generation disclosure
+
+The current project-authored source code was generated with AI assistance. See
+the full [AI generation disclosure](AI_DISCLOSURE.md). Project-authored
+material is distributed under the [MIT License](LICENSE); third-party
+dependencies, Wonderdraft, and user-provided assets retain their own terms.
+
+## Download
+
+Prebuilt Linux (x86_64), Windows (x86_64), and macOS (Intel) executables are
+attached to each [GitHub release](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest).
+The macOS binary is unsigned, so macOS may require explicit approval in
+Privacy & Security on first launch.
 
 ## Implemented features
 
@@ -39,6 +64,8 @@ It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, P
 - Multiple `.wonderdraft_theme` files per project.
 - Project saving, including edited/original sprite images in a sidecar data folder.
 - Wonderdraft directory export with duplicate-name and invalid-theme checks.
+- Automatic Wonderdraft installation-folder discovery from `config.ini` on Linux, Windows, and macOS.
+- One-click **Install asset pack**, honoring Wonderdraft's `custom_assets_directory` override and offering a folder picker when automatic discovery is unavailable.
 
 ## Typical workflow
 
@@ -51,7 +78,18 @@ It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, P
 7. Zoom with the wheel or zoom slider, pan with the middle mouse button, and reset with **Fit**.
 8. Drag the red pivot marker to set offsets, or drag the orange circle to set the radius.
 9. Assign the asset type, category, name, draw mode, radius, and offsets.
-10. Add or edit themes in the **Themes** tab, then click **Export Wonderdraft pack**.
+10. Add or edit themes in the **Themes** tab.
+11. Click **Install asset pack** to copy it directly into Wonderdraft, or **Export Wonderdraft pack** to choose another destination.
+
+## Install directly into Wonderdraft
+
+The **Install asset pack** button looks for the same Wonderdraft user-data locations used by Miracle Draft Map Helper:
+
+- Windows: `%APPDATA%\Wonderdraft\config.ini`
+- macOS: `~/Library/Application Support/Wonderdraft/config.ini`
+- Linux: `~/.local/share/Wonderdraft/config.ini`
+
+If `config.ini` contains `custom_assets_directory`, that directory takes precedence. Otherwise the standard Wonderdraft user-data directory is used. If the folder cannot be detected, the app asks you to select either the folder containing `config.ini` or the custom content root. Selecting an `assets` folder also works; the app uses its parent so exported paths remain `assets/<PackName>/...` rather than `assets/assets/<PackName>/...`.
 
 ## Exported structure
 
@@ -112,7 +150,7 @@ cargo build --release
 The executable is:
 
 ```text
-target/release/wonderdraft-asset-studio
+target/release/assetpack-builder-for-wonderdraft
 ```
 
 You may copy that one file anywhere. The Linux binary uses the normal desktop graphics/window libraries already present on mainstream distributions.
@@ -122,6 +160,23 @@ A convenience script is included:
 ```bash
 ./build-linux.sh
 ```
+
+### Linux application launcher
+
+After building the release executable, add Assetpack Builder for Wonderdraft to your
+desktop application menu without administrator access:
+
+```bash
+./install-linux-launcher.sh
+```
+
+The installer copies the executable below `XDG_DATA_HOME` (normally
+`~/.local/share`), installs `assetpack_builder_for_wonderdraft.png` as the
+fallback icon and `assetpack_builder_for_wonderdraft.svg` as the scalable icon,
+and creates
+`~/.local/share/applications/assetpack-builder-for-wonderdraft.desktop`. The repository
+also contains `assetpack-builder-for-wonderdraft.desktop`, the portable launcher
+template used by the installer.
 
 ## Build on Windows
 
@@ -140,7 +195,7 @@ cargo build --release
 The executable is:
 
 ```text
-target\release\wonderdraft-asset-studio.exe
+target\release\assetpack-builder-for-wonderdraft.exe
 ```
 
 A convenience script is included:
@@ -149,11 +204,41 @@ A convenience script is included:
 .\build-windows.ps1
 ```
 
-## Automatic Windows and Linux builds
+For development, `start_assetpack_builder_for_wonderdraft.bat` builds and runs the app
+from the repository.
 
-The included GitHub Actions workflow builds and tests both operating-system versions. Push the project to GitHub, open the **Actions** tab, run **Build release binaries**, and download the two artifacts.
+## Build on macOS
 
-Creating a Git tag beginning with `v`, such as `v0.2.0`, also runs the workflow.
+Install Rust using rustup, then run:
+
+```bash
+cargo test
+cargo build --release
+```
+
+The executable is:
+
+```text
+target/release/assetpack-builder-for-wonderdraft
+```
+
+## Automatic Linux, Windows, and macOS builds
+
+The included GitHub Actions workflow builds and tests Linux, Windows, and macOS versions. Push the project to GitHub, open the **Actions** tab, run **Build release binaries**, and download the three artifacts.
+
+Creating a Git tag beginning with `v`, such as `v0.2.0`, also creates a GitHub Release and attaches all three binaries.
+
+## Development and validation
+
+```bash
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow,
+[AI_DISCLOSURE.md](AI_DISCLOSURE.md) for the AI-use disclosure, and
+[LICENSE](LICENSE) for licensing terms.
 
 ## Algorithm correspondence
 

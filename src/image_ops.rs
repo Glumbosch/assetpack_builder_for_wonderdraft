@@ -51,10 +51,7 @@ pub fn smart_edge_remove(image: &mut RgbaImage, tolerance: u8) -> usize {
             .any(|corner| color_distance_rgb(pixel, *corner) <= tol)
     };
 
-    let add = |idx: usize,
-               visited: &mut [bool],
-               queue: &mut VecDeque<usize>,
-               img: &RgbaImage| {
+    let add = |idx: usize, visited: &mut [bool], queue: &mut VecDeque<usize>, img: &RgbaImage| {
         if !visited[idx] && qualifies(idx, img) {
             visited[idx] = true;
             queue.push_back(idx);
@@ -145,8 +142,7 @@ pub fn soften_alpha(image: &mut RgbaImage, radius: u32) {
         for x in 0..w as usize {
             let x0 = x.saturating_sub(radius as usize);
             let x1 = (x + radius as usize + 1).min(w as usize);
-            let sum = integral[y1 * stride + x1]
-                + integral[y0 * stride + x0]
+            let sum = integral[y1 * stride + x1] + integral[y0 * stride + x0]
                 - integral[y0 * stride + x1]
                 - integral[y1 * stride + x0];
             let n = (x1 - x0) * (y1 - y0);
@@ -214,9 +210,7 @@ pub fn apply_brush_stamp(
             if dx * dx + dy * dy <= r2 {
                 match mode {
                     BrushMode::Erase => image.get_pixel_mut(x, y)[3] = 0,
-                    BrushMode::Restore => {
-                        *image.get_pixel_mut(x, y) = *original.get_pixel(x, y)
-                    }
+                    BrushMode::Restore => *image.get_pixel_mut(x, y) = *original.get_pixel(x, y),
                 }
             }
         }
@@ -264,14 +258,7 @@ mod tests {
         let original = RgbaImage::from_pixel(3, 3, Rgba([10, 20, 30, 200]));
         let mut working = original.clone();
         working.get_pixel_mut(1, 1)[3] = 0;
-        apply_brush_stamp(
-            &mut working,
-            &original,
-            1.5,
-            1.5,
-            1.0,
-            BrushMode::Restore,
-        );
+        apply_brush_stamp(&mut working, &original, 1.5, 1.5, 1.0, BrushMode::Restore);
         assert_eq!(*working.get_pixel(1, 1), Rgba([10, 20, 30, 200]));
     }
 

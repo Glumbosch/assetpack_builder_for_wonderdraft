@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Assetpack Builder for Wonderdraft
+GenericName=Wonderdraft assetpack builder
+Comment=Create, edit, export, and install Wonderdraft asset packs
+Exec=assetpack-builder-for-wonderdraft
+Path=/
+Icon=assetpack-builder-for-wonderdraft
+Terminal=false
+Categories=Graphics;
+Keywords=Wonderdraft;assets;sprites;maps;
+StartupNotify=true
+StartupWMClass=assetpack-builder-for-wonderdraft
