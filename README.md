@@ -4,11 +4,17 @@
 [![Latest release](https://img.shields.io/github/v/release/Glumbosch/assetpack_builder_for_wonderdraft)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+![app icon](assetpack_builder_for_wonderdraft.svg)
+
+
+
+
 A small native desktop application for preparing Wonderdraft asset packs from ordinary images and sprite sheets.
+![main window](screenshots/crop_workspace.jpg)
 
 It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, Python, or an embedded browser. Release builds are distributed as one executable per operating system.
 
-> This is an experimental, unofficial tool. Keep backups of source images and
+> This is an unofficial tool. Keep backups of source images and
 > project files, and inspect installed packs in Wonderdraft before relying on
 > them.
 
