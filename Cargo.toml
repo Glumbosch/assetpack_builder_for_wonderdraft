@@ -1,8 +1,8 @@
 [package]
-name = "wonderdraft-asset-studio"
+name = "assetpack-builder-for-wonderdraft"
 version = "0.2.0"
 edition = "2021"
-description = "Native Wonderdraft asset-pack creator and sprite transparency editor"
+description = "Native assetpack builder and sprite transparency editor for Wonderdraft"
 license = "MIT"
 
 

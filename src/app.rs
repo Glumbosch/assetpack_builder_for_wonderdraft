@@ -82,7 +82,7 @@ struct SpriteOverlay {
 
 const SPRITE_PIVOT_HIT_RADIUS: f32 = 24.0;
 
-pub struct WonderdraftAssetStudio {
+pub struct AssetpackBuilderForWonderdraft {
     pack_name: String,
     sources: Vec<SourceImage>,
     sprites: Vec<SpriteAsset>,
@@ -120,7 +120,7 @@ pub struct WonderdraftAssetStudio {
     status: String,
 }
 
-impl Default for WonderdraftAssetStudio {
+impl Default for AssetpackBuilderForWonderdraft {
     fn default() -> Self {
         Self {
             pack_name: "MyFantasyPack".to_owned(),
@@ -156,7 +156,7 @@ impl Default for WonderdraftAssetStudio {
     }
 }
 
-impl WonderdraftAssetStudio {
+impl AssetpackBuilderForWonderdraft {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.all_styles_mut(|style| {
@@ -416,7 +416,10 @@ impl WonderdraftAssetStudio {
         let path = match self.project_path.clone() {
             Some(path) => path,
             None => match rfd::FileDialog::new()
-                .add_filter("Wonderdraft Asset Studio project", &["wdassetproj"])
+                .add_filter(
+                    "Assetpack Builder for Wonderdraft project",
+                    &["wdassetproj"],
+                )
                 .set_file_name("asset-pack.wdassetproj")
                 .save_file()
             {
@@ -450,7 +453,10 @@ impl WonderdraftAssetStudio {
 
     fn open_project_action(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("Wonderdraft Asset Studio project", &["wdassetproj"])
+            .add_filter(
+                "Assetpack Builder for Wonderdraft project",
+                &["wdassetproj"],
+            )
             .pick_file()
         else {
             return;
@@ -1998,7 +2004,7 @@ impl WonderdraftAssetStudio {
     }
 }
 
-impl eframe::App for WonderdraftAssetStudio {
+impl eframe::App for AssetpackBuilderForWonderdraft {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_dropped_files(&ctx);

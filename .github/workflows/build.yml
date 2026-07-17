@@ -40,11 +40,11 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/release/wonderdraft-asset-studio dist/wonderdraft-asset-studio-linux-x86_64
+          cp target/release/assetpack-builder-for-wonderdraft dist/assetpack-builder-for-wonderdraft-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: wonderdraft-asset-studio-linux-x86_64
-          path: dist/wonderdraft-asset-studio-linux-x86_64
+          name: assetpack-builder-for-wonderdraft-linux-x86_64
+          path: dist/assetpack-builder-for-wonderdraft-linux-x86_64
           if-no-files-found: error
 
   windows:
@@ -64,11 +64,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\release\wonderdraft-asset-studio.exe dist\wonderdraft-asset-studio-windows-x86_64.exe
+          Copy-Item target\release\assetpack-builder-for-wonderdraft.exe dist\assetpack-builder-for-wonderdraft-windows-x86_64.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: wonderdraft-asset-studio-windows-x86_64
-          path: dist/wonderdraft-asset-studio-windows-x86_64.exe
+          name: assetpack-builder-for-wonderdraft-windows-x86_64
+          path: dist/assetpack-builder-for-wonderdraft-windows-x86_64.exe
           if-no-files-found: error
 
   macos:
@@ -87,11 +87,11 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/release/wonderdraft-asset-studio dist/wonderdraft-asset-studio-macos-x86_64
+          cp target/release/assetpack-builder-for-wonderdraft dist/assetpack-builder-for-wonderdraft-macos-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: wonderdraft-asset-studio-macos-x86_64
-          path: dist/wonderdraft-asset-studio-macos-x86_64
+          name: assetpack-builder-for-wonderdraft-macos-x86_64
+          path: dist/assetpack-builder-for-wonderdraft-macos-x86_64
           if-no-files-found: error
 
   release:

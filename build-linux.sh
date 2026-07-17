@@ -9,11 +9,11 @@ cargo test
 cargo build --release
 
 mkdir -p dist
-cp target/release/wonderdraft-asset-studio \
-   dist/wonderdraft-asset-studio
+cp target/release/assetpack-builder-for-wonderdraft \
+   dist/assetpack-builder-for-wonderdraft
 
 echo
 echo "Built:"
-echo "  dist/wonderdraft-asset-studio"
+echo "  dist/assetpack-builder-for-wonderdraft"
 echo
 echo "This Linux build uses X11/XWayland so file drag-and-drop works."

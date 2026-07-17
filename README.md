@@ -1,4 +1,4 @@
-# Wonderdraft Asset Studio
+# Assetpack Builder for Wonderdraft
 
 [![CI](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml/badge.svg)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml)
 [![Latest release](https://img.shields.io/github/v/release/Glumbosch/assetpack_builder_for_wonderdraft)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest)
@@ -150,7 +150,7 @@ cargo build --release
 The executable is:
 
 ```text
-target/release/wonderdraft-asset-studio
+target/release/assetpack-builder-for-wonderdraft
 ```
 
 You may copy that one file anywhere. The Linux binary uses the normal desktop graphics/window libraries already present on mainstream distributions.
@@ -163,7 +163,7 @@ A convenience script is included:
 
 ### Linux application launcher
 
-After building the release executable, add Wonderdraft Asset Studio to your
+After building the release executable, add Assetpack Builder for Wonderdraft to your
 desktop application menu without administrator access:
 
 ```bash
@@ -174,8 +174,8 @@ The installer copies the executable below `XDG_DATA_HOME` (normally
 `~/.local/share`), installs `assetpack_builder_for_wonderdraft.png` as the
 fallback icon and `assetpack_builder_for_wonderdraft.svg` as the scalable icon,
 and creates
-`~/.local/share/applications/wonderdraft-asset-studio.desktop`. The repository
-also contains `wonderdraft-asset-studio.desktop`, the portable launcher
+`~/.local/share/applications/assetpack-builder-for-wonderdraft.desktop`. The repository
+also contains `assetpack-builder-for-wonderdraft.desktop`, the portable launcher
 template used by the installer.
 
 ## Build on Windows
@@ -195,7 +195,7 @@ cargo build --release
 The executable is:
 
 ```text
-target\release\wonderdraft-asset-studio.exe
+target\release\assetpack-builder-for-wonderdraft.exe
 ```
 
 A convenience script is included:
@@ -204,7 +204,7 @@ A convenience script is included:
 .\build-windows.ps1
 ```
 
-For development, `start_wonderdraft_asset_studio.bat` builds and runs the app
+For development, `start_assetpack_builder_for_wonderdraft.bat` builds and runs the app
 from the repository.
 
 ## Build on macOS
@@ -219,7 +219,7 @@ cargo build --release
 The executable is:
 
 ```text
-target/release/wonderdraft-asset-studio
+target/release/assetpack-builder-for-wonderdraft
 ```
 
 ## Automatic Linux, Windows, and macOS builds
