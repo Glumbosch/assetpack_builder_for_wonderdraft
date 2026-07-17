@@ -209,6 +209,8 @@ pub struct AssetpackBuilderForWonderdraft {
     editing_sprite_name: Option<u64>,
     source_drop_rect: Option<Rect>,
     sprite_drop_rect: Option<Rect>,
+    source_canvas_drop_rect: Option<Rect>,
+    sprite_canvas_drop_rect: Option<Rect>,
     file_drop_target: Option<FileDropTarget>,
     status: String,
 }
@@ -263,6 +265,8 @@ impl AssetpackBuilderForWonderdraft {
             editing_sprite_name: None,
             source_drop_rect: None,
             sprite_drop_rect: None,
+            source_canvas_drop_rect: None,
+            sprite_canvas_drop_rect: None,
             file_drop_target: None,
             status: "Import images or drop them into a source or sprite area.".to_owned(),
         }
@@ -517,21 +521,23 @@ impl AssetpackBuilderForWonderdraft {
                 Some(FileDropTarget::Sprite) => self.import_direct_sprite_paths(paths),
                 None => {
                     self.status =
-                        "Drop images inside Source images or Extracted sprites.".to_owned();
+                        "Drop images inside a source or extracted-sprite import area.".to_owned();
                 }
             }
         }
     }
 
     fn drop_target_at(&self, pointer: Pos2) -> Option<FileDropTarget> {
-        if self
-            .sprite_drop_rect
-            .is_some_and(|rect| rect.contains(pointer))
+        if [self.sprite_drop_rect, self.sprite_canvas_drop_rect]
+            .into_iter()
+            .flatten()
+            .any(|rect| rect.contains(pointer))
         {
             Some(FileDropTarget::Sprite)
-        } else if self
-            .source_drop_rect
-            .is_some_and(|rect| rect.contains(pointer))
+        } else if [self.source_drop_rect, self.source_canvas_drop_rect]
+            .into_iter()
+            .flatten()
+            .any(|rect| rect.contains(pointer))
         {
             Some(FileDropTarget::Source)
         } else {
@@ -595,6 +601,16 @@ impl AssetpackBuilderForWonderdraft {
             (
                 FileDropTarget::Sprite,
                 self.sprite_drop_rect,
+                "Drop as extracted sprite",
+            ),
+            (
+                FileDropTarget::Source,
+                self.source_canvas_drop_rect,
+                "Drop as source image",
+            ),
+            (
+                FileDropTarget::Sprite,
+                self.sprite_canvas_drop_rect,
                 "Drop as extracted sprite",
             ),
         ] {
@@ -2307,17 +2323,22 @@ impl AssetpackBuilderForWonderdraft {
             ui.available_height().max(100.0),
         );
         let (canvas_rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
+        self.source_canvas_drop_rect = Some(canvas_rect);
         let painter = ui.painter_at(canvas_rect);
         painter.rect_filled(canvas_rect, 0.0, Color32::from_gray(24));
 
         let Some(source_index) = self.selected_source_index() else {
+            response.clone().on_hover_cursor(CursorIcon::PointingHand);
             painter.text(
                 canvas_rect.center(),
                 Align2::CENTER_CENTER,
-                "Import an image, then draw multiple crop regions.",
+                "Click to import source images, or drop them here.",
                 FontId::proportional(20.0),
                 Color32::LIGHT_GRAY,
             );
+            if response.clicked_by(PointerButton::Primary) {
+                self.import_dialog();
+            }
             return;
         };
 
@@ -2745,6 +2766,7 @@ impl AssetpackBuilderForWonderdraft {
             );
             return;
         };
+        self.sprite_canvas_drop_rect = Some(canvas_rect);
 
         let (
             texture_id,
@@ -2816,19 +2838,39 @@ impl AssetpackBuilderForWonderdraft {
             canvas_rect.center() + self.sprite_pan,
             fitted_rect.size() * self.sprite_zoom,
         );
-        let (zoom_scroll, adjust_scroll, gesture_zoom, pointer, middle_down, pointer_delta) = ui
-            .input(|input| {
-                let (zoom_scroll, adjust_scroll) =
-                    partition_mouse_wheel_delta(input, wheel_adjust_binding, !crop_mode);
-                (
-                    zoom_scroll,
-                    adjust_scroll,
-                    input.zoom_delta(),
-                    input.pointer.hover_pos(),
-                    input.pointer.button_down(PointerButton::Middle),
-                    input.pointer.delta(),
-                )
-            });
+        let (
+            mut zoom_scroll,
+            mut adjust_scroll,
+            gesture_zoom,
+            control_down,
+            pointer,
+            middle_down,
+            pointer_delta,
+        ) = ui.input(|input| {
+            let (zoom_scroll, adjust_scroll) =
+                partition_mouse_wheel_delta(input, wheel_adjust_binding, !crop_mode);
+            (
+                zoom_scroll,
+                adjust_scroll,
+                input.zoom_delta(),
+                input.modifiers.ctrl,
+                input.pointer.hover_pos(),
+                input.pointer.button_down(PointerButton::Middle),
+                input.pointer.delta(),
+            )
+        });
+        if control_down {
+            if adjust_scroll.abs() <= f32::EPSILON {
+                adjust_scroll = if zoom_scroll.abs() > f32::EPSILON {
+                    zoom_scroll
+                } else if (gesture_zoom - 1.0).abs() > f32::EPSILON {
+                    (gesture_zoom - 1.0).signum()
+                } else {
+                    0.0
+                };
+            }
+            zoom_scroll = 0.0;
+        }
         let pointer_over_canvas = pointer.is_some_and(|pointer| canvas_rect.contains(pointer));
         let pointer_over_image = pointer.is_some_and(|pointer| image_rect.contains(pointer));
         let old_zoom = self.sprite_zoom;
@@ -2854,7 +2896,9 @@ impl AssetpackBuilderForWonderdraft {
                     }
                 }
             }
-            let zoom_factor = if zoom_scroll.abs() > f32::EPSILON {
+            let zoom_factor = if control_down {
+                None
+            } else if zoom_scroll.abs() > f32::EPSILON {
                 Some((zoom_scroll * 0.0015).exp())
             } else if adjust_scroll.abs() <= f32::EPSILON
                 && (gesture_zoom - 1.0).abs() > f32::EPSILON
@@ -2879,7 +2923,7 @@ impl AssetpackBuilderForWonderdraft {
             && WHEEL_DEBUG
         {
             eprintln!(
-                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
+                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} settings_open={} ctrl={control_down} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
                 response.hovered(),
                 self.settings_open,
                 self.sprite_zoom,
@@ -3444,6 +3488,10 @@ impl eframe::App for AssetpackBuilderForWonderdraft {
         self.debug_wheel_events(&ctx);
         self.handle_dropped_files(&ctx);
         self.handle_shortcuts(&ctx);
+        self.source_drop_rect = None;
+        self.sprite_drop_rect = None;
+        self.source_canvas_drop_rect = None;
+        self.sprite_canvas_drop_rect = None;
         self.top_bar(ui);
         self.status_bar(ui);
         match self.main_tab {
@@ -3509,7 +3557,9 @@ fn partition_mouse_wheel_delta(
         } = event
         {
             let delta = mouse_wheel_delta_in_points(*unit, *delta);
-            if adjustment_enabled && adjustment_binding.held_during_wheel(input, *modifiers) {
+            if modifiers.ctrl
+                || (adjustment_enabled && adjustment_binding.held_during_wheel(input, *modifiers))
+            {
                 adjustment_delta += delta;
             } else {
                 zoom_delta += delta;
@@ -3683,9 +3733,11 @@ fn zoom_at_pointer(
     if (new_zoom - old_zoom).abs() <= f32::EPSILON {
         return;
     }
-    let actual_factor = new_zoom / old_zoom.max(f32::EPSILON);
-    let old_center = canvas_center + *pan;
-    *pan += (pointer - old_center) * (1.0 - actual_factor);
+    if old_zoom >= 1.0 && new_zoom >= 1.0 {
+        let actual_factor = new_zoom / old_zoom.max(f32::EPSILON);
+        let old_center = canvas_center + *pan;
+        *pan += (pointer - old_center) * (1.0 - actual_factor);
+    }
     *zoom = new_zoom;
 }
 
@@ -4476,6 +4528,23 @@ mod tests {
     }
 
     #[test]
+    fn zoom_below_one_keeps_pan_unchanged() {
+        let mut zoom = 0.8;
+        let mut pan = vec2(30.0, -20.0);
+
+        zoom_at_pointer(
+            &mut zoom,
+            &mut pan,
+            pos2(525.0, 360.0),
+            pos2(400.0, 300.0),
+            0.5,
+        );
+
+        assert!((zoom - 0.4).abs() < f32::EPSILON);
+        assert_eq!(pan, vec2(30.0, -20.0));
+    }
+
+    #[test]
     fn plain_wheel_is_routed_to_canvas_zoom() {
         let mut input = egui::InputState::default();
         input.events.push(egui::Event::MouseWheel {
@@ -4486,7 +4555,7 @@ mod tests {
         });
         let binding = ShortcutSettings::default().sprite_erase_wheel_adjust;
 
-        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, true);
+        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, false);
 
         assert_eq!(zoom, 40.0);
         assert_eq!(adjustment, 0.0);
@@ -4513,7 +4582,7 @@ mod tests {
         });
         let binding = ShortcutSettings::default().sprite_erase_wheel_adjust;
 
-        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, true);
+        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, false);
 
         assert_eq!(zoom, 0.0);
         assert_eq!(adjustment, -40.0);
@@ -4524,6 +4593,10 @@ mod tests {
         let mut app = AssetpackBuilderForWonderdraft::from_settings(AppSettings::default());
         app.source_drop_rect = Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0)));
         app.sprite_drop_rect = Some(Rect::from_min_max(pos2(0.0, 120.0), pos2(100.0, 220.0)));
+        app.source_canvas_drop_rect =
+            Some(Rect::from_min_max(pos2(120.0, 0.0), pos2(220.0, 100.0)));
+        app.sprite_canvas_drop_rect =
+            Some(Rect::from_min_max(pos2(120.0, 120.0), pos2(220.0, 220.0)));
 
         assert_eq!(
             app.drop_target_at(pos2(50.0, 50.0)),
@@ -4533,7 +4606,15 @@ mod tests {
             app.drop_target_at(pos2(50.0, 150.0)),
             Some(FileDropTarget::Sprite)
         );
-        assert_eq!(app.drop_target_at(pos2(150.0, 50.0)), None);
+        assert_eq!(
+            app.drop_target_at(pos2(150.0, 50.0)),
+            Some(FileDropTarget::Source)
+        );
+        assert_eq!(
+            app.drop_target_at(pos2(150.0, 150.0)),
+            Some(FileDropTarget::Sprite)
+        );
+        assert_eq!(app.drop_target_at(pos2(250.0, 50.0)), None);
     }
 
     #[test]
