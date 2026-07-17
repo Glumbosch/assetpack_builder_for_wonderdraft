@@ -35,6 +35,7 @@ Privacy & Security on first launch.
 
 - Import one or many PNG, JPEG, WebP, BMP, or TIFF images.
 - Separate source-image and extracted-sprite import buttons and drop areas. Images dropped on the sprite area are imported as complete, uncropped sprites.
+- Crop rows use a photo-share symbol when a sprite has been extracted, and sprite rows use draw-mode symbols instead of mode text.
 - Drag a source-image row onto the extracted-sprite area to extract the complete image.
 - Draw any number of crop rectangles on one source image.
 - Select, move, and resize crop rectangles using eight draggable edge/corner handles.
@@ -70,7 +71,8 @@ Privacy & Security on first launch.
 - Wonderdraft directory export with duplicate-name and invalid-theme checks.
 - Automatic Wonderdraft installation-folder discovery from `config.ini` on Linux, Windows, and macOS.
 - One-click **Install asset pack**, honoring Wonderdraft's `custom_assets_directory` override and offering a folder picker when automatic discovery is unavailable.
-- Persistent settings for the install directory, default pack name, default export directory, and exporting without another directory prompt.
+- Persistent settings for Dark/Light appearance, the install directory, default pack name, default export directory, and exporting without another directory prompt. SVG symbols follow the active text color.
+- Settings displays the package version, unique build ID, build profile, build timestamp, and running executable path.
 - Double-click a sprite-list name to edit it inline and update its PNG/metadata name at the same time.
 
 ## Typical workflow
@@ -87,7 +89,7 @@ Privacy & Security on first launch.
 10. Add or edit themes in the **Themes** tab.
 11. Click **Install asset pack** to copy it directly into Wonderdraft, or **Export Wonderdraft pack** to choose another destination.
 
-Use **Settings** to configure the install directory and defaults for new pack names and exports. When **Do not ask for an export directory** is enabled, **Export Wonderdraft pack** writes directly to the configured export folder.
+Use **Settings** to select Dark or Light appearance, configure the install directory, and set defaults for new pack names and exports. When **Do not ask for an export directory** is enabled, **Export Wonderdraft pack** writes directly to the configured export folder.
 
 ## Keyboard shortcuts
 
@@ -154,6 +156,8 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 
 The three Ctrl+mouse-wheel modifiers are editable independently under **Settings → Keyboard shortcuts**, alongside the other shortcuts. Crop edges and radius handles use matching resize cursors; moving crop regions or sprite pivots uses the four-direction move cursor.
 
+Wheel input prints diagnostic lines to the launching terminal. `[wheel-debug][raw]` shows the event received from the window system, while `[crop-route]`, `[sprite-route]`, and `[slider-route]` show where it was routed and the before/after values. The app also prints `[build-info]` at startup. Compare it with **Settings → Build information** when checking that the intended executable is running.
+
 ## Install directly into Wonderdraft
 
 The **Install asset pack** button looks for the same Wonderdraft user-data locations used by Miracle Draft Map Helper:
@@ -213,7 +217,7 @@ Ubuntu/Debian example:
 sudo apt update
 sudo apt install -y \
   build-essential pkg-config libgl1-mesa-dev libx11-dev libxi-dev \
-  libxcursor-dev libxrandr-dev libxinerama-dev libxkbcommon-dev \
+  libxcursor-dev libxrandr-dev libxiner.ama-dev libxkbcommon-dev \
   libwayland-dev libdbus-1-dev
 
 cargo test

@@ -74,6 +74,18 @@ impl ShortcutBinding {
         }
     }
 
+    pub fn held_during_wheel(self, input: &InputState, modifiers: Modifiers) -> bool {
+        match self {
+            Self::Key(shortcut) => {
+                input.key_down(shortcut.logical_key) && modifiers.matches_exact(shortcut.modifiers)
+            }
+            Self::Modifier(ModifierKey::Shift) => modifiers.shift,
+            Self::Modifier(ModifierKey::Alt) => modifiers.alt,
+            Self::Modifier(ModifierKey::Control) => modifiers.ctrl,
+            Self::Modifier(ModifierKey::Command) => modifiers.command,
+        }
+    }
+
     pub fn from_event(event: &Event) -> Option<Self> {
         let Event::Key {
             key,

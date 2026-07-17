@@ -8,9 +8,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::shortcuts::ShortcutSettings;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AppearanceMode {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl AppearanceMode {
+    pub const ALL: [Self; 2] = [Self::Dark, Self::Light];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub appearance: AppearanceMode,
     pub install_directory: Option<PathBuf>,
     pub default_pack_name: String,
     pub export_directory: Option<PathBuf>,
@@ -21,6 +40,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            appearance: AppearanceMode::Dark,
             install_directory: find_install_root(),
             default_pack_name: "MyFantasyPack".to_owned(),
             export_directory: None,
@@ -191,6 +211,18 @@ custom_assets_directory="/home/test/Wonderdraft2"
         assert_eq!(settings.default_pack_name, "Old pack");
         assert!(!settings.export_without_asking);
         assert!(settings.export_directory.is_none());
+        assert_eq!(settings.appearance, AppearanceMode::Dark);
         assert_eq!(settings.shortcuts, ShortcutSettings::default());
+    }
+
+    #[test]
+    fn appearance_round_trips() {
+        let settings = AppSettings {
+            appearance: AppearanceMode::Light,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.appearance, AppearanceMode::Light);
     }
 }

@@ -2,7 +2,9 @@
 
 ## Applied changes
 
-- File drops are consumed from egui's window-global dropped-file queue, so images can be dropped anywhere in the application window.
+- File drops use separate Source images and Extracted sprites targets; dropping elsewhere does not import the files into the wrong list.
+- Added draw-mode symbols to sprite rows, photo-share markers to extracted crop rows, and persistent Dark/Light appearance with text-colored SVG symbols.
+- Added wheel-event routing diagnostics and Settings build information. Canvas wheel zoom no longer depends on egui's response-hover flag and also accepts native zoom gestures.
 - A full-window overlay is shown while files are hovering over the application.
 - New imports begin without an automatic full-image crop.
 - Selected crop regions have eight draggable edge and corner handles.

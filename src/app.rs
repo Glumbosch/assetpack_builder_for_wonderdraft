@@ -13,7 +13,7 @@ use crate::{
         smart_edge_remove, soften_alpha, threshold_alpha, BrushMode,
     },
     model::{AssetKind, CropRegion, DrawMode, SourceImage, SpriteAsset, ThemeDraft},
-    settings::AppSettings,
+    settings::{AppSettings, AppearanceMode},
     shortcuts::{ShortcutBinding, ShortcutSettings},
 };
 
@@ -75,13 +75,29 @@ enum SpriteOverlayDrag {
     Radius,
 }
 
-fn draw_mode_icon(ui: &mut egui::Ui, mode: DrawMode, size: f32) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileDropTarget {
+    Source,
+    Sprite,
+}
+
+fn draw_mode_image(mode: DrawMode, size: f32) -> egui::Image<'static> {
     let icon = match mode {
         DrawMode::Normal => egui::include_image!("../app_assets/icons/rubber-stamp.svg"),
         DrawMode::SampleColor => egui::include_image!("../app_assets/icons/brush.svg"),
         DrawMode::CustomColors => egui::include_image!("../app_assets/icons/palette.svg"),
     };
-    ui.add(egui::Image::new(icon).fit_to_exact_size(vec2(size, size)));
+    egui::Image::new(icon).fit_to_exact_size(vec2(size, size))
+}
+
+fn draw_mode_icon(ui: &mut egui::Ui, mode: DrawMode, size: f32) {
+    let tint = ui.visuals().text_color();
+    ui.add(draw_mode_image(mode, size).tint(tint));
+}
+
+fn photo_share_image(size: f32) -> egui::Image<'static> {
+    egui::Image::new(egui::include_image!("../app_assets/icons/photo-share.svg"))
+        .fit_to_exact_size(vec2(size, size))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,6 +115,7 @@ struct SpriteOverlay {
 }
 
 const SPRITE_PIVOT_HIT_RADIUS: f32 = 24.0;
+const WHEEL_DEBUG: bool = true;
 
 #[derive(Debug, Clone)]
 struct SourceDragPayload(u64);
@@ -150,6 +167,7 @@ pub struct AssetpackBuilderForWonderdraft {
     editing_sprite_name: Option<u64>,
     source_drop_rect: Option<Rect>,
     sprite_drop_rect: Option<Rect>,
+    file_drop_target: Option<FileDropTarget>,
     status: String,
 }
 
@@ -203,17 +221,27 @@ impl AssetpackBuilderForWonderdraft {
             editing_sprite_name: None,
             source_drop_rect: None,
             sprite_drop_rect: None,
-            status: "Import images or drag files into the window.".to_owned(),
+            file_drop_target: None,
+            status: "Import images or drop them into a source or sprite area.".to_owned(),
         }
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let app = Self::default();
+        apply_appearance(&cc.egui_ctx, app.settings.appearance);
         cc.egui_ctx.all_styles_mut(|style| {
             style.spacing.button_padding = vec2(10.0, 10.0);
             style.spacing.interact_size.y = 36.0;
         });
-        Self::default()
+        eprintln!(
+            "[build-info] version={} build={} executable={}",
+            env!("CARGO_PKG_VERSION"),
+            env!("ASSETPACK_BUILDER_BUILD_ID"),
+            std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("unavailable ({error})")),
+        );
+        app
     }
 
     fn alloc_id(&mut self) -> u64 {
@@ -413,7 +441,19 @@ impl AssetpackBuilderForWonderdraft {
     }
 
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
-        let dropped_files = ctx.input(|input| input.raw.dropped_files.clone());
+        let (has_hovered_files, dropped_files, pointer) = ctx.input(|input| {
+            (
+                !input.raw.hovered_files.is_empty(),
+                input.raw.dropped_files.clone(),
+                input.pointer.hover_pos(),
+            )
+        });
+
+        if has_hovered_files {
+            if let Some(pointer) = pointer {
+                self.file_drop_target = self.drop_target_at(pointer);
+            }
+        }
 
         if dropped_files.is_empty() {
             return;
@@ -424,18 +464,69 @@ impl AssetpackBuilderForWonderdraft {
             .filter_map(|file| file.path)
             .collect::<Vec<_>>();
 
+        let target = match pointer {
+            Some(pointer) => self.drop_target_at(pointer),
+            None => self.file_drop_target,
+        };
+        self.file_drop_target = None;
         if !paths.is_empty() {
-            let pointer = ctx.input(|input| input.pointer.hover_pos());
-            let direct_to_sprites = pointer.is_some_and(|pointer| {
-                self.sprite_drop_rect
-                    .is_some_and(|rect| rect.contains(pointer))
-            });
-            if direct_to_sprites {
-                self.import_direct_sprite_paths(paths);
-            } else {
-                self.import_paths(paths);
+            match target {
+                Some(FileDropTarget::Source) => self.import_paths(paths),
+                Some(FileDropTarget::Sprite) => self.import_direct_sprite_paths(paths),
+                None => {
+                    self.status =
+                        "Drop images inside Source images or Extracted sprites.".to_owned();
+                }
             }
         }
+    }
+
+    fn drop_target_at(&self, pointer: Pos2) -> Option<FileDropTarget> {
+        if self
+            .sprite_drop_rect
+            .is_some_and(|rect| rect.contains(pointer))
+        {
+            Some(FileDropTarget::Sprite)
+        } else if self
+            .source_drop_rect
+            .is_some_and(|rect| rect.contains(pointer))
+        {
+            Some(FileDropTarget::Source)
+        } else {
+            None
+        }
+    }
+
+    fn debug_wheel_events(&self, ctx: &egui::Context) {
+        if !WHEEL_DEBUG {
+            return;
+        }
+        ctx.input(|input| {
+            for event in &input.events {
+                match event {
+                    egui::Event::MouseWheel {
+                        unit,
+                        delta,
+                        modifiers,
+                        phase,
+                    } => eprintln!(
+                        "[wheel-debug][raw] tab={:?} view={:?} unit={unit:?} delta={delta:?} modifiers={modifiers:?} phase={phase:?} pointer={:?} smooth={:?} zoom_delta={:.4}",
+                        self.main_tab,
+                        self.asset_view,
+                        input.pointer.hover_pos(),
+                        input.smooth_scroll_delta,
+                        input.zoom_delta(),
+                    ),
+                    egui::Event::Zoom(factor) => eprintln!(
+                        "[wheel-debug][raw-zoom] tab={:?} view={:?} factor={factor:.4} pointer={:?}",
+                        self.main_tab,
+                        self.asset_view,
+                        input.pointer.hover_pos(),
+                    ),
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn paint_drop_overlay(&self, ctx: &egui::Context) {
@@ -448,30 +539,51 @@ impl AssetpackBuilderForWonderdraft {
             egui::Order::Foreground,
             egui::Id::new("file_drop_overlay"),
         ));
-        let rect = ctx.input(|input| input.content_rect()).shrink(24.0);
-        painter.rect_filled(rect, 12.0, Color32::from_rgba_unmultiplied(20, 30, 40, 220));
-        painter.rect_stroke(
-            rect,
-            12.0,
-            Stroke::new(4.0, Color32::LIGHT_BLUE),
-            StrokeKind::Inside,
-        );
         let pointer = ctx.input(|input| input.pointer.hover_pos());
-        let direct_to_sprites = pointer.is_some_and(|pointer| {
-            self.sprite_drop_rect
-                .is_some_and(|drop_rect| drop_rect.contains(pointer))
-        });
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            if direct_to_sprites {
-                "Drop here to import whole images as sprites"
+        let active_target = match pointer {
+            Some(pointer) => self.drop_target_at(pointer),
+            None => self.file_drop_target,
+        };
+        for (target, rect, label) in [
+            (
+                FileDropTarget::Source,
+                self.source_drop_rect,
+                "Drop as source image",
+            ),
+            (
+                FileDropTarget::Sprite,
+                self.sprite_drop_rect,
+                "Drop as extracted sprite",
+            ),
+        ] {
+            let Some(rect) = rect else {
+                continue;
+            };
+            let active = active_target == Some(target);
+            let color = if active {
+                Color32::LIGHT_BLUE
             } else {
-                "Drop here to import source images"
-            },
-            FontId::proportional(28.0),
-            Color32::WHITE,
-        );
+                Color32::GRAY
+            };
+            painter.rect_filled(
+                rect,
+                8.0,
+                Color32::from_black_alpha(if active { 210 } else { 150 }),
+            );
+            painter.rect_stroke(
+                rect,
+                8.0,
+                Stroke::new(if active { 4.0 } else { 2.0 }, color),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(20.0),
+                Color32::WHITE,
+            );
+        }
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -1109,6 +1221,34 @@ impl AssetpackBuilderForWonderdraft {
                     .max_height((ctx.content_rect().height() - 150.0).max(300.0))
                     .show(ui, |ui| {
                         ui.heading("General");
+                        ComboBox::from_label("Appearance")
+                            .selected_text(self.settings_draft.appearance.label())
+                            .show_ui(ui, |ui| {
+                                for appearance in AppearanceMode::ALL {
+                                    ui.selectable_value(
+                                        &mut self.settings_draft.appearance,
+                                        appearance,
+                                        appearance.label(),
+                                    );
+                                }
+                        });
+                        ui.label("App symbols follow the active text color.");
+                        ui.add_space(8.0);
+                        ui.strong("Build information");
+                        ui.monospace(format!("Version: {}", env!("CARGO_PKG_VERSION")));
+                        ui.monospace(format!(
+                            "Build: {}",
+                            env!("ASSETPACK_BUILDER_BUILD_ID")
+                        ));
+                        match std::env::current_exe() {
+                            Ok(path) => {
+                                ui.monospace(format!("Executable: {}", path.display()));
+                            }
+                            Err(error) => {
+                                ui.label(format!("Executable path unavailable: {error}"));
+                            }
+                        }
+                        ui.add_space(8.0);
                         ui.label("Wonderdraft asset-pack install directory");
                         path_setting_row(
                             ui,
@@ -1266,6 +1406,7 @@ impl AssetpackBuilderForWonderdraft {
                 match crate::settings::save(&self.settings_draft) {
                     Ok(()) => {
                         self.settings = self.settings_draft.clone();
+                        apply_appearance(ctx, self.settings.appearance);
                         self.install_root = self.settings.install_directory.clone();
                         self.shortcut_capture = None;
                         self.settings_open = false;
@@ -1372,22 +1513,34 @@ impl AssetpackBuilderForWonderdraft {
                                         for (index, crop) in
                                             self.sources[source_index].crops.iter().enumerate()
                                         {
-                                            let suffix =
-                                                if crop.sprite_id.is_some() { " ✓" } else { "" };
-                                            if ui
-                                                .selectable_label(
-                                                    self.selected_crop == Some(crop.id)
-                                                        && self.asset_view == AssetView::Crop,
-                                                    format!(
-                                                        "Crop {} — {}×{}{}",
-                                                        index + 1,
-                                                        crop.width,
-                                                        crop.height,
-                                                        suffix
-                                                    ),
+                                            let selected = self.selected_crop == Some(crop.id)
+                                                && self.asset_view == AssetView::Crop;
+                                            let text = format!(
+                                                "Crop {} — {}×{}",
+                                                index + 1,
+                                                crop.width,
+                                                crop.height
+                                            );
+                                            let button = if crop.sprite_id.is_some() {
+                                                egui::Button::image_and_text(
+                                                    photo_share_image(18.0),
+                                                    text,
                                                 )
-                                                .clicked()
-                                            {
+                                                .image_tint_follows_text_color(true)
+                                            } else {
+                                                egui::Button::new(text)
+                                            }
+                                            .selected(selected)
+                                            .frame(false);
+                                            let response = ui.add(button);
+                                            let response = if crop.sprite_id.is_some() {
+                                                response.on_hover_text(
+                                                    "This crop has an extracted sprite",
+                                                )
+                                            } else {
+                                                response
+                                            };
+                                            if response.clicked() {
                                                 self.selected_crop = Some(crop.id);
                                                 self.asset_view = AssetView::Crop;
                                             }
@@ -1433,11 +1586,11 @@ impl AssetpackBuilderForWonderdraft {
                                                 sprite.file_stem.clone_from(&sprite.name);
                                             }
                                             ui.label(format!(
-                                                "[{} / {}] {}",
+                                                "[{} / {}]",
                                                 sprite.kind.label(),
                                                 sprite.category,
-                                                sprite.draw_mode.label()
                                             ));
+                                            draw_mode_icon(ui, sprite.draw_mode, 18.0);
                                             if response.lost_focus()
                                                 || ui.input(|input| input.key_pressed(Key::Enter))
                                             {
@@ -1445,16 +1598,22 @@ impl AssetpackBuilderForWonderdraft {
                                             }
                                         });
                                     } else {
-                                        let response = ui.selectable_label(
-                                            selected,
-                                            format!(
-                                                "{}  [{} / {}] {}",
-                                                sprite.name,
-                                                sprite.kind.label(),
-                                                sprite.category,
-                                                sprite.draw_mode.label()
-                                            ),
-                                        );
+                                        let response = ui
+                                            .add(
+                                                egui::Button::image_and_text(
+                                                    draw_mode_image(sprite.draw_mode, 18.0),
+                                                    format!(
+                                                        "{}  [{} / {}]",
+                                                        sprite.name,
+                                                        sprite.kind.label(),
+                                                        sprite.category,
+                                                    ),
+                                                )
+                                                .image_tint_follows_text_color(true)
+                                                .selected(selected)
+                                                .frame(false),
+                                            )
+                                            .on_hover_text(sprite.draw_mode.label());
                                         if response.double_clicked() {
                                             self.editing_sprite_name = Some(sprite.id);
                                         } else if response.clicked() {
@@ -2022,32 +2181,50 @@ impl AssetpackBuilderForWonderdraft {
             canvas_rect.center() + self.crop_pan,
             fitted_rect.size() * self.crop_zoom,
         );
-        if response.hovered() {
-            let (scroll, pointer, middle_down, pointer_delta) = ui.input(|input| {
-                (
-                    input.smooth_scroll_delta.y,
-                    input.pointer.hover_pos(),
-                    input.pointer.button_down(PointerButton::Middle),
-                    input.pointer.delta(),
-                )
-            });
-            if scroll.abs() > 0.0 && pointer.is_some_and(|pointer| image_rect.contains(pointer)) {
+        let (scroll, gesture_zoom, pointer, middle_down, pointer_delta) = ui.input(|input| {
+            (
+                mouse_wheel_delta(input),
+                input.zoom_delta(),
+                input.pointer.hover_pos(),
+                input.pointer.button_down(PointerButton::Middle),
+                input.pointer.delta(),
+            )
+        });
+        let pointer_over_canvas = pointer.is_some_and(|pointer| canvas_rect.contains(pointer));
+        let pointer_over_image = pointer.is_some_and(|pointer| image_rect.contains(pointer));
+        if scroll.abs() > f32::EPSILON || (gesture_zoom - 1.0).abs() > f32::EPSILON {
+            let old_zoom = self.crop_zoom;
+            let old_pan = self.crop_pan;
+            if pointer_over_image {
+                let factor = if scroll.abs() > f32::EPSILON {
+                    (scroll * 0.0015).exp()
+                } else {
+                    gesture_zoom
+                };
                 zoom_at_pointer(
                     &mut self.crop_zoom,
                     &mut self.crop_pan,
                     pointer.expect("checked above"),
                     canvas_rect.center(),
-                    (scroll * 0.0015).exp(),
+                    factor,
                 );
             }
-            if middle_down {
-                self.crop_pan += pointer_delta;
+            if WHEEL_DEBUG {
+                eprintln!(
+                    "[wheel-debug][crop-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} wheel_points={scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?}",
+                    response.hovered(),
+                    self.crop_zoom,
+                    self.crop_pan,
+                );
             }
-            image_rect = Rect::from_center_size(
-                canvas_rect.center() + self.crop_pan,
-                fitted_rect.size() * self.crop_zoom,
-            );
         }
+        if middle_down && (response.hovered() || response.dragged()) {
+            self.crop_pan += pointer_delta;
+        }
+        image_rect = Rect::from_center_size(
+            canvas_rect.center() + self.crop_pan,
+            fitted_rect.size() * self.crop_zoom,
+        );
         painter.image(
             texture_id,
             image_rect,
@@ -2462,73 +2639,96 @@ impl AssetpackBuilderForWonderdraft {
         } else {
             self.sprite_tool
         };
-        let wheel_adjust_held = ui.input(|input| match effective_tool {
-            SpriteTool::Erase => self
-                .settings
-                .shortcuts
-                .sprite_erase_wheel_adjust
-                .held(input),
-            SpriteTool::Restore => self
-                .settings
-                .shortcuts
-                .sprite_restore_wheel_adjust
-                .held(input),
-            SpriteTool::PickColor => self
-                .settings
-                .shortcuts
-                .sprite_pick_tolerance_wheel_adjust
-                .held(input),
-        });
+        let wheel_adjust_binding = match effective_tool {
+            SpriteTool::Erase => self.settings.shortcuts.sprite_erase_wheel_adjust,
+            SpriteTool::Restore => self.settings.shortcuts.sprite_restore_wheel_adjust,
+            SpriteTool::PickColor => self.settings.shortcuts.sprite_pick_tolerance_wheel_adjust,
+        };
 
         let fitted_rect = fit_image_rect(canvas_rect.shrink(20.0), image_w, image_h);
         let mut image_rect = Rect::from_center_size(
             canvas_rect.center() + self.sprite_pan,
             fitted_rect.size() * self.sprite_zoom,
         );
-        if response.hovered() {
-            let (scroll, pointer, middle_down, pointer_delta) = ui.input(|input| {
+        let (zoom_scroll, adjust_scroll, gesture_zoom, pointer, middle_down, pointer_delta) = ui
+            .input(|input| {
+                let (zoom_scroll, adjust_scroll) =
+                    partition_mouse_wheel_delta(input, wheel_adjust_binding, !crop_mode);
                 (
-                    input.smooth_scroll_delta.y,
+                    zoom_scroll,
+                    adjust_scroll,
+                    input.zoom_delta(),
                     input.pointer.hover_pos(),
                     input.pointer.button_down(PointerButton::Middle),
                     input.pointer.delta(),
                 )
             });
-            if scroll.abs() > 0.0 && pointer.is_some_and(|pointer| image_rect.contains(pointer)) {
-                if wheel_adjust_held && !crop_mode {
-                    let direction = scroll.signum();
-                    match effective_tool {
-                        SpriteTool::Erase => {
-                            self.erase_brush_size =
-                                (self.erase_brush_size + direction * 2.0).clamp(1.0, 300.0);
-                        }
-                        SpriteTool::Restore => {
-                            self.restore_brush_size =
-                                (self.restore_brush_size + direction * 2.0).clamp(1.0, 300.0);
-                        }
-                        SpriteTool::PickColor => {
-                            self.tolerance =
-                                (self.tolerance as i16 + direction as i16).clamp(0, 255) as u8;
-                        }
+        let pointer_over_canvas = pointer.is_some_and(|pointer| canvas_rect.contains(pointer));
+        let pointer_over_image = pointer.is_some_and(|pointer| image_rect.contains(pointer));
+        let old_zoom = self.sprite_zoom;
+        let old_pan = self.sprite_pan;
+        let old_erase_size = self.erase_brush_size;
+        let old_restore_size = self.restore_brush_size;
+        let old_tolerance = self.tolerance;
+        if pointer_over_image {
+            if adjust_scroll.abs() > f32::EPSILON {
+                let direction = adjust_scroll.signum();
+                match effective_tool {
+                    SpriteTool::Erase => {
+                        self.erase_brush_size =
+                            (self.erase_brush_size + direction * 2.0).clamp(1.0, 300.0);
                     }
-                } else {
-                    zoom_at_pointer(
-                        &mut self.sprite_zoom,
-                        &mut self.sprite_pan,
-                        pointer.expect("checked above"),
-                        canvas_rect.center(),
-                        (scroll * 0.0015).exp(),
-                    );
+                    SpriteTool::Restore => {
+                        self.restore_brush_size =
+                            (self.restore_brush_size + direction * 2.0).clamp(1.0, 300.0);
+                    }
+                    SpriteTool::PickColor => {
+                        self.tolerance =
+                            (self.tolerance as i16 + direction as i16).clamp(0, 255) as u8;
+                    }
                 }
             }
-            if middle_down {
-                self.sprite_pan += pointer_delta;
+            let zoom_factor = if zoom_scroll.abs() > f32::EPSILON {
+                Some((zoom_scroll * 0.0015).exp())
+            } else if adjust_scroll.abs() <= f32::EPSILON
+                && (gesture_zoom - 1.0).abs() > f32::EPSILON
+            {
+                Some(gesture_zoom)
+            } else {
+                None
+            };
+            if let Some(zoom_factor) = zoom_factor {
+                zoom_at_pointer(
+                    &mut self.sprite_zoom,
+                    &mut self.sprite_pan,
+                    pointer.expect("checked above"),
+                    canvas_rect.center(),
+                    zoom_factor,
+                );
             }
-            image_rect = Rect::from_center_size(
-                canvas_rect.center() + self.sprite_pan,
-                fitted_rect.size() * self.sprite_zoom,
+        }
+        if (zoom_scroll.abs() > f32::EPSILON
+            || adjust_scroll.abs() > f32::EPSILON
+            || (gesture_zoom - 1.0).abs() > f32::EPSILON)
+            && WHEEL_DEBUG
+        {
+            eprintln!(
+                "[wheel-debug][sprite-route] response_hovered={} pointer={pointer:?} over_canvas={pointer_over_canvas} over_image={pointer_over_image} crop_mode={crop_mode} tool={effective_tool:?} binding={wheel_adjust_binding:?} zoom_points={zoom_scroll:.3} adjust_points={adjust_scroll:.3} gesture_zoom={gesture_zoom:.4} zoom={old_zoom:.4}->{:.4} pan={old_pan:?}->{:?} erase={old_erase_size:.1}->{:.1} restore={old_restore_size:.1}->{:.1} tolerance={old_tolerance}->{}",
+                response.hovered(),
+                self.sprite_zoom,
+                self.sprite_pan,
+                self.erase_brush_size,
+                self.restore_brush_size,
+                self.tolerance,
             );
         }
+        if middle_down && (response.hovered() || response.dragged()) {
+            self.sprite_pan += pointer_delta;
+        }
+        image_rect = Rect::from_center_size(
+            canvas_rect.center() + self.sprite_pan,
+            fitted_rect.size() * self.sprite_zoom,
+        );
 
         paint_checkerboard(&painter, image_rect, 14.0);
         painter.image(
@@ -3052,6 +3252,7 @@ impl AssetpackBuilderForWonderdraft {
 impl eframe::App for AssetpackBuilderForWonderdraft {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.debug_wheel_events(&ctx);
         self.handle_dropped_files(&ctx);
         self.handle_shortcuts(&ctx);
         self.top_bar(ui);
@@ -3069,6 +3270,64 @@ impl eframe::App for AssetpackBuilderForWonderdraft {
 enum SliderWheel {
     Linear(f64),
     Multiplicative(f64),
+}
+
+fn apply_appearance(ctx: &egui::Context, appearance: AppearanceMode) {
+    let visuals = match appearance {
+        AppearanceMode::Dark => egui::Visuals::dark(),
+        AppearanceMode::Light => egui::Visuals::light(),
+    };
+    ctx.set_visuals(visuals);
+}
+
+fn mouse_wheel_delta(input: &egui::InputState) -> f32 {
+    input
+        .events
+        .iter()
+        .filter_map(|event| {
+            if let egui::Event::MouseWheel { unit, delta, .. } = event {
+                Some(mouse_wheel_delta_in_points(*unit, *delta))
+            } else {
+                None
+            }
+        })
+        .sum()
+}
+
+fn mouse_wheel_delta_in_points(unit: egui::MouseWheelUnit, delta: Vec2) -> f32 {
+    const LINE_POINTS: f32 = 40.0;
+    const PAGE_POINTS: f32 = 800.0;
+    match unit {
+        egui::MouseWheelUnit::Point => delta.y,
+        egui::MouseWheelUnit::Line => delta.y * LINE_POINTS,
+        egui::MouseWheelUnit::Page => delta.y * PAGE_POINTS,
+    }
+}
+
+fn partition_mouse_wheel_delta(
+    input: &egui::InputState,
+    adjustment_binding: ShortcutBinding,
+    adjustment_enabled: bool,
+) -> (f32, f32) {
+    let mut zoom_delta = 0.0;
+    let mut adjustment_delta = 0.0;
+    for event in &input.events {
+        if let egui::Event::MouseWheel {
+            unit,
+            delta,
+            modifiers,
+            ..
+        } = event
+        {
+            let delta = mouse_wheel_delta_in_points(*unit, *delta);
+            if adjustment_enabled && adjustment_binding.held_during_wheel(input, *modifiers) {
+                adjustment_delta += delta;
+            } else {
+                zoom_delta += delta;
+            }
+        }
+    }
+    (zoom_delta, adjustment_delta)
 }
 
 fn add_wheel_slider<T: egui::emath::Numeric>(
@@ -3102,7 +3361,7 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
     }
 
     if response.hovered() {
-        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+        let scroll = ui.input(mouse_wheel_delta);
         if scroll.abs() > f32::EPSILON {
             let current = value.to_f64();
             let next = match wheel {
@@ -3113,6 +3372,13 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
             .clamp(min, max);
             *value = T::from_f64(next);
             response.mark_changed();
+            if WHEEL_DEBUG {
+                eprintln!(
+                    "[wheel-debug][slider-route] label={:?} response_hovered={} wheel_points={scroll:.3} value={current:.4}->{next:.4}",
+                    text,
+                    response.hovered(),
+                );
+            }
             ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         }
     }
@@ -4010,6 +4276,57 @@ mod tests {
 
         let after = (pointer - (canvas_center + pan)) / zoom;
         assert!((before - after).length() < 0.001);
+    }
+
+    #[test]
+    fn plain_wheel_is_routed_to_canvas_zoom() {
+        let mut input = egui::InputState::default();
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let binding = ShortcutSettings::default().sprite_erase_wheel_adjust;
+
+        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, true);
+
+        assert_eq!(zoom, 40.0);
+        assert_eq!(adjustment, 0.0);
+    }
+
+    #[test]
+    fn control_wheel_is_routed_to_active_tool_adjustment() {
+        let mut input = egui::InputState::default();
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::CTRL,
+        });
+        let binding = ShortcutSettings::default().sprite_erase_wheel_adjust;
+
+        let (zoom, adjustment) = partition_mouse_wheel_delta(&input, binding, true);
+
+        assert_eq!(zoom, 0.0);
+        assert_eq!(adjustment, -40.0);
+    }
+
+    #[test]
+    fn source_and_sprite_drop_areas_are_independent() {
+        let mut app = AssetpackBuilderForWonderdraft::from_settings(AppSettings::default());
+        app.source_drop_rect = Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0)));
+        app.sprite_drop_rect = Some(Rect::from_min_max(pos2(0.0, 120.0), pos2(100.0, 220.0)));
+
+        assert_eq!(
+            app.drop_target_at(pos2(50.0, 50.0)),
+            Some(FileDropTarget::Source)
+        );
+        assert_eq!(
+            app.drop_target_at(pos2(50.0, 150.0)),
+            Some(FileDropTarget::Sprite)
+        );
+        assert_eq!(app.drop_target_at(pos2(150.0, 50.0)), None);
     }
 
     #[test]
