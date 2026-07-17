@@ -158,7 +158,7 @@ struct SpriteOverlay {
 
 const SPRITE_PIVOT_HIT_RADIUS: f32 = 24.0;
 const WHEEL_DEBUG: bool = true;
-const ZOOM_MIN: f32 = 0.1;
+const ZOOM_MIN: f32 = 0.01;
 const ZOOM_MAX: f32 = 12.0;
 
 #[derive(Debug, Clone)]
@@ -1933,7 +1933,7 @@ impl AssetpackBuilderForWonderdraft {
             let response = add_wheel_slider(
                 ui,
                 &mut self.crop_zoom,
-                0.1..=12.0,
+                ZOOM_MIN..=ZOOM_MAX,
                 SliderWheel::Multiplicative(1.1),
                 Some("Zoom"),
                 true,
@@ -2127,7 +2127,7 @@ impl AssetpackBuilderForWonderdraft {
             let response = add_wheel_slider(
                 ui,
                 &mut self.sprite_zoom,
-                0.1..=12.0,
+                ZOOM_MIN..=ZOOM_MAX,
                 SliderWheel::Multiplicative(1.1),
                 Some("Zoom"),
                 true,
@@ -3730,21 +3730,28 @@ fn add_wheel_slider<T: egui::emath::Numeric>(
 ) -> egui::Response {
     let min = range.start().to_f64().min(range.end().to_f64());
     let max = range.start().to_f64().max(range.end().to_f64());
-    let keyboard_step = match wheel {
-        SliderWheel::Linear(step) => step,
-        SliderWheel::Multiplicative(_) => ((max - min) / 100.0).max(0.01),
-    };
     // Render the numeric value as a read-only label. egui's built-in editable
     // value can keep stale edit text focused and write it back on a later pass,
     // undoing zoom changes made by either the canvas or the mouse wheel.
     ui.horizontal(|ui| {
-        let mut slider = egui::Slider::new(value, range)
-            .step_by(keyboard_step)
+        // The slider edits a frame-local copy. It is committed only when egui
+        // reports an actual interaction. SliderClamping::Edits is important:
+        // `Always` calls `set_value` while merely rendering and used to round a
+        // canvas-written zoom back to the slider's old linear step.
+        let mut slider_value = *value;
+        let mut slider = egui::Slider::new(&mut slider_value, range)
+            .clamping(egui::SliderClamping::Edits)
             .show_value(false);
+        if let SliderWheel::Linear(step) = wheel {
+            slider = slider.step_by(step);
+        }
         if logarithmic {
             slider = slider.logarithmic(true);
         }
         let mut response = ui.add(slider);
+        if response.changed() {
+            *value = slider_value;
+        }
         if response.clicked() || response.drag_started() {
             response.request_focus();
         }
@@ -4736,6 +4743,37 @@ mod tests {
         assert_eq!(slider_value_text(24_u8), "24");
         assert_eq!(slider_value_text(0.457_f32), "0.457");
         assert_eq!(slider_value_text(1.0_f32), "1");
+    }
+
+    #[test]
+    fn rendering_zoom_slider_does_not_quantize_canvas_zoom() {
+        let expected = 0.766_596_f32;
+        let mut zoom = expected;
+
+        egui::__run_test_ui(|ui| {
+            add_wheel_slider(
+                ui,
+                &mut zoom,
+                ZOOM_MIN..=ZOOM_MAX,
+                SliderWheel::Multiplicative(1.1),
+                Some("Zoom"),
+                true,
+                true,
+            );
+        });
+
+        assert_eq!(zoom, expected);
+    }
+
+    #[test]
+    fn zoom_uses_one_percent_as_its_shared_minimum() {
+        let mut zoom = 0.011;
+        let mut pan = Vec2::ZERO;
+
+        zoom_at_pointer(&mut zoom, &mut pan, Pos2::ZERO, Pos2::ZERO, 0.5);
+
+        assert_eq!(zoom, ZOOM_MIN);
+        assert_eq!(ZOOM_MIN, 0.01);
     }
 
     #[test]
