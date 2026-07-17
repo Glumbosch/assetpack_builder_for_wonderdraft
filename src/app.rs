@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ops::RangeInclusive, path::PathBuf};
 
 use eframe::egui::{
     self, pos2, vec2, Align2, Color32, ColorImage, ComboBox, CursorIcon, FontId, Key,
@@ -75,6 +75,15 @@ enum SpriteOverlayDrag {
     Radius,
 }
 
+fn draw_mode_icon(ui: &mut egui::Ui, mode: DrawMode, size: f32) {
+    let icon = match mode {
+        DrawMode::Normal => egui::include_image!("../app_assets/icons/rubber-stamp.svg"),
+        DrawMode::SampleColor => egui::include_image!("../app_assets/icons/brush.svg"),
+        DrawMode::CustomColors => egui::include_image!("../app_assets/icons/palette.svg"),
+    };
+    ui.add(egui::Image::new(icon).fit_to_exact_size(vec2(size, size)));
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SpriteCropDrag {
     handle: CropHandle,
@@ -124,7 +133,8 @@ pub struct AssetpackBuilderForWonderdraft {
     sprite_zoom: f32,
     sprite_pan: Vec2,
 
-    brush_size: f32,
+    erase_brush_size: f32,
+    restore_brush_size: f32,
     tolerance: u8,
     alpha_blur_radius: u32,
     picked_color: [u8; 3],
@@ -177,7 +187,8 @@ impl AssetpackBuilderForWonderdraft {
             sprite_crop_drag: None,
             sprite_zoom: 1.0,
             sprite_pan: Vec2::ZERO,
-            brush_size: 24.0,
+            erase_brush_size: 24.0,
+            restore_brush_size: 24.0,
             tolerance: 24,
             alpha_blur_radius: 2,
             picked_color: [255, 255, 255],
@@ -196,6 +207,7 @@ impl AssetpackBuilderForWonderdraft {
         }
     }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.all_styles_mut(|style| {
             style.spacing.button_padding = vec2(10.0, 10.0);
@@ -224,6 +236,42 @@ impl AssetpackBuilderForWonderdraft {
 
     fn selected_sprite_index(&self) -> Option<usize> {
         self.selected_sprite.and_then(|id| self.sprite_index(id))
+    }
+
+    fn active_brush_size(&self, tool: SpriteTool) -> Option<f32> {
+        match tool {
+            SpriteTool::Erase => Some(self.erase_brush_size),
+            SpriteTool::Restore => Some(self.restore_brush_size),
+            SpriteTool::PickColor => None,
+        }
+    }
+
+    fn adjust_active_brush_size(&mut self, amount: f32) {
+        let brush_size = match self.sprite_tool {
+            SpriteTool::Erase => &mut self.erase_brush_size,
+            SpriteTool::Restore => &mut self.restore_brush_size,
+            SpriteTool::PickColor => return,
+        };
+        *brush_size = (*brush_size + amount).clamp(1.0, 300.0);
+    }
+
+    fn sync_sprite_crop_to_source(&mut self, sprite_index: usize) {
+        let source_id = self.sprites[sprite_index].source_id;
+        let crop_id = self.sprites[sprite_index].crop_id;
+        let mut bounds = self.sprites[sprite_index].crop_bounds.clone();
+        bounds.id = crop_id;
+        bounds.sprite_id = Some(self.sprites[sprite_index].id);
+        self.sprites[sprite_index].crop_bounds = bounds.clone();
+
+        if let Some(source_index) = self.source_index(source_id) {
+            if let Some(crop) = self.sources[source_index]
+                .crops
+                .iter_mut()
+                .find(|crop| crop.id == crop_id)
+            {
+                *crop = bounds;
+            }
+        }
     }
 
     fn import_dialog(&mut self) {
@@ -349,6 +397,7 @@ impl AssetpackBuilderForWonderdraft {
             .iter_mut()
             .filter(|sprite| sprite.source_id == source_id)
         {
+            rotate_crop_clockwise(&mut sprite.crop_bounds, old_height);
             sprite.original = imageops::rotate90(&sprite.original);
             sprite.working = imageops::rotate90(&sprite.working);
             (sprite.offset_x, sprite.offset_y) = (sprite.offset_y, -sprite.offset_x);
@@ -486,10 +535,10 @@ impl AssetpackBuilderForWonderdraft {
             self.sprite_pan = Vec2::ZERO;
         }
         if pressed(shortcuts.sprite_brush_smaller) {
-            self.brush_size = (self.brush_size - 2.0).max(1.0);
+            self.adjust_active_brush_size(-2.0);
         }
         if pressed(shortcuts.sprite_brush_larger) {
-            self.brush_size = (self.brush_size + 2.0).min(300.0);
+            self.adjust_active_brush_size(2.0);
         }
 
         let redo = pressed(shortcuts.sprite_redo);
@@ -501,9 +550,11 @@ impl AssetpackBuilderForWonderdraft {
 
         if redo {
             if self.sprites[sprite_index].redo() {
+                self.sync_sprite_crop_to_source(sprite_index);
                 self.status = "Redid sprite edit.".to_owned();
             }
         } else if undo && self.sprites[sprite_index].undo() {
+            self.sync_sprite_crop_to_source(sprite_index);
             self.status = "Undid sprite edit.".to_owned();
         }
     }
@@ -852,6 +903,11 @@ impl AssetpackBuilderForWonderdraft {
             id: sprite_id,
             source_id,
             crop_id,
+            crop_bounds: {
+                let mut bounds = crop.clone();
+                bounds.sprite_id = Some(sprite_id);
+                bounds
+            },
             original: extracted.clone(),
             working: extracted,
             name,
@@ -1162,6 +1218,18 @@ impl AssetpackBuilderForWonderdraft {
                         shortcut_row!("Fit image", sprite_fit);
                         shortcut_row!("Decrease brush diameter", sprite_brush_smaller);
                         shortcut_row!("Increase brush diameter", sprite_brush_larger);
+                        shortcut_row!(
+                            "Erase diameter + mouse wheel modifier",
+                            sprite_erase_wheel_adjust
+                        );
+                        shortcut_row!(
+                            "Restore diameter + mouse wheel modifier",
+                            sprite_restore_wheel_adjust
+                        );
+                        shortcut_row!(
+                            "Pick tolerance + mouse wheel modifier",
+                            sprite_pick_tolerance_wheel_adjust
+                        );
                         shortcut_row!("Undo sprite edit", sprite_undo);
                         shortcut_row!("Redo sprite edit", sprite_redo);
 
@@ -1368,7 +1436,7 @@ impl AssetpackBuilderForWonderdraft {
                                                 "[{} / {}] {}",
                                                 sprite.kind.label(),
                                                 sprite.category,
-                                                sprite.draw_mode.emoji()
+                                                sprite.draw_mode.label()
                                             ));
                                             if response.lost_focus()
                                                 || ui.input(|input| input.key_pressed(Key::Enter))
@@ -1384,7 +1452,7 @@ impl AssetpackBuilderForWonderdraft {
                                                 sprite.name,
                                                 sprite.kind.label(),
                                                 sprite.category,
-                                                sprite.draw_mode.emoji()
+                                                sprite.draw_mode.label()
                                             ),
                                         );
                                         if response.double_clicked() {
@@ -1477,10 +1545,14 @@ impl AssetpackBuilderForWonderdraft {
         }
         ui.label(format!("Source: {source_w} × {source_h} px"));
         ui.horizontal(|ui| {
-            ui.add(
-                egui::Slider::new(&mut self.crop_zoom, 0.1..=12.0)
-                    .logarithmic(true)
-                    .text("Zoom"),
+            add_wheel_slider(
+                ui,
+                &mut self.crop_zoom,
+                0.1..=12.0,
+                SliderWheel::Multiplicative(1.1),
+                Some("Zoom"),
+                true,
+                true,
             );
             if ui.button("Fit").clicked() {
                 self.crop_zoom = 1.0;
@@ -1516,9 +1588,14 @@ impl AssetpackBuilderForWonderdraft {
                     .num_columns(3)
                     .show(ui, |ui| {
                         ui.label("X");
-                        ui.add(
-                            egui::Slider::new(&mut crop.x, 0..=source_w.saturating_sub(crop.width))
-                                .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut crop.x,
+                            0..=source_w.saturating_sub(crop.width),
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut crop.x)
@@ -1526,12 +1603,14 @@ impl AssetpackBuilderForWonderdraft {
                         );
                         ui.end_row();
                         ui.label("Y");
-                        ui.add(
-                            egui::Slider::new(
-                                &mut crop.y,
-                                0..=source_h.saturating_sub(crop.height),
-                            )
-                            .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut crop.y,
+                            0..=source_h.saturating_sub(crop.height),
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut crop.y)
@@ -1539,12 +1618,14 @@ impl AssetpackBuilderForWonderdraft {
                         );
                         ui.end_row();
                         ui.label("Width");
-                        ui.add(
-                            egui::Slider::new(
-                                &mut crop.width,
-                                1..=source_w.saturating_sub(crop.x).max(1),
-                            )
-                            .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut crop.width,
+                            1..=source_w.saturating_sub(crop.x).max(1),
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut crop.width)
@@ -1552,12 +1633,14 @@ impl AssetpackBuilderForWonderdraft {
                         );
                         ui.end_row();
                         ui.label("Height");
-                        ui.add(
-                            egui::Slider::new(
-                                &mut crop.height,
-                                1..=source_h.saturating_sub(crop.y).max(1),
-                            )
-                            .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut crop.height,
+                            1..=source_h.saturating_sub(crop.y).max(1),
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut crop.height)
@@ -1626,10 +1709,14 @@ impl AssetpackBuilderForWonderdraft {
         };
 
         ui.horizontal(|ui| {
-            ui.add(
-                egui::Slider::new(&mut self.sprite_zoom, 0.1..=12.0)
-                    .logarithmic(true)
-                    .text("Zoom"),
+            add_wheel_slider(
+                ui,
+                &mut self.sprite_zoom,
+                0.1..=12.0,
+                SliderWheel::Multiplicative(1.1),
+                Some("Zoom"),
+                true,
+                true,
             );
             if ui.button("Fit").clicked() {
                 self.sprite_zoom = 1.0;
@@ -1648,6 +1735,7 @@ impl AssetpackBuilderForWonderdraft {
         let mut run_soften = false;
         let mut run_threshold = false;
         let mut reset_original = false;
+        let mut sprite_history_changed = false;
 
         {
             let sprite = &mut self.sprites[sprite_index];
@@ -1667,13 +1755,20 @@ impl AssetpackBuilderForWonderdraft {
             ui.text_edit_singleline(&mut sprite.category);
 
             if sprite.kind.is_sprite() {
-                ComboBox::from_label("Draw mode")
-                    .selected_text(sprite.draw_mode.display_label())
-                    .show_ui(ui, |ui| {
-                        for mode in DrawMode::ALL {
-                            ui.selectable_value(&mut sprite.draw_mode, mode, mode.display_label());
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    ui.label("Draw mode");
+                    draw_mode_icon(ui, sprite.draw_mode, 18.0);
+                    ComboBox::from_id_salt("draw_mode")
+                        .selected_text(sprite.draw_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in DrawMode::ALL {
+                                ui.horizontal(|ui| {
+                                    draw_mode_icon(ui, mode, 18.0);
+                                    ui.selectable_value(&mut sprite.draw_mode, mode, mode.label());
+                                });
+                            }
+                        });
+                });
                 let image_width = sprite.working.width().max(1) as i32;
                 let image_height = sprite.working.height().max(1) as i32;
                 let maximum_radius = image_width.max(image_height).saturating_mul(2);
@@ -1682,17 +1777,27 @@ impl AssetpackBuilderForWonderdraft {
                     .spacing(vec2(8.0, 6.0))
                     .show(ui, |ui| {
                         ui.label("Radius");
-                        ui.add(
-                            egui::Slider::new(&mut sprite.radius, 0..=maximum_radius)
-                                .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut sprite.radius,
+                            0..=maximum_radius,
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(egui::DragValue::new(&mut sprite.radius).range(0..=100_000));
                         ui.end_row();
 
                         ui.label("Offset X");
-                        ui.add(
-                            egui::Slider::new(&mut sprite.offset_x, -image_width..=image_width)
-                                .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut sprite.offset_x,
+                            -image_width..=image_width,
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut sprite.offset_x).range(-100_000..=100_000),
@@ -1700,9 +1805,14 @@ impl AssetpackBuilderForWonderdraft {
                         ui.end_row();
 
                         ui.label("Offset Y");
-                        ui.add(
-                            egui::Slider::new(&mut sprite.offset_y, -image_height..=image_height)
-                                .show_value(false),
+                        add_wheel_slider(
+                            ui,
+                            &mut sprite.offset_y,
+                            -image_height..=image_height,
+                            SliderWheel::Linear(1.0),
+                            None,
+                            false,
+                            false,
                         );
                         ui.add(
                             egui::DragValue::new(&mut sprite.offset_y).range(-100_000..=100_000),
@@ -1728,8 +1838,40 @@ impl AssetpackBuilderForWonderdraft {
                 ui.selectable_value(&mut self.sprite_tool, SpriteTool::Restore, "Restore");
                 ui.selectable_value(&mut self.sprite_tool, SpriteTool::PickColor, "Pick color");
             });
-            ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=300.0).text("Brush diameter"));
-            ui.add(egui::Slider::new(&mut self.tolerance, 0..=255).text("Color / alpha tolerance"));
+            match self.sprite_tool {
+                SpriteTool::Erase => {
+                    add_wheel_slider(
+                        ui,
+                        &mut self.erase_brush_size,
+                        1.0..=300.0,
+                        SliderWheel::Linear(2.0),
+                        Some("Erase brush diameter"),
+                        true,
+                        false,
+                    );
+                }
+                SpriteTool::Restore => {
+                    add_wheel_slider(
+                        ui,
+                        &mut self.restore_brush_size,
+                        1.0..=300.0,
+                        SliderWheel::Linear(2.0),
+                        Some("Restore brush diameter"),
+                        true,
+                        false,
+                    );
+                }
+                SpriteTool::PickColor => {}
+            }
+            add_wheel_slider(
+                ui,
+                &mut self.tolerance,
+                0..=255,
+                SliderWheel::Linear(1.0),
+                Some("Color / alpha tolerance"),
+                true,
+                false,
+            );
 
             ui.horizontal(|ui| {
                 ui.label("Picked color:");
@@ -1755,8 +1897,14 @@ impl AssetpackBuilderForWonderdraft {
             {
                 run_smart_edge = true;
             }
-            ui.add(
-                egui::Slider::new(&mut self.alpha_blur_radius, 1..=12).text("Alpha soften radius"),
+            add_wheel_slider(
+                ui,
+                &mut self.alpha_blur_radius,
+                1..=12,
+                SliderWheel::Linear(1.0),
+                Some("Alpha soften radius"),
+                true,
+                false,
             );
             if ui.button("Soften alpha edge").clicked() {
                 run_soften = true;
@@ -1771,13 +1919,13 @@ impl AssetpackBuilderForWonderdraft {
                     .add_enabled(!sprite.undo.is_empty(), egui::Button::new("Undo"))
                     .clicked()
                 {
-                    sprite.undo();
+                    sprite_history_changed = sprite.undo();
                 }
                 if ui
                     .add_enabled(!sprite.redo.is_empty(), egui::Button::new("Redo"))
                     .clicked()
                 {
-                    sprite.redo();
+                    sprite_history_changed = sprite.redo();
                 }
                 if ui.button("Reset original").clicked() {
                     reset_original = true;
@@ -1786,6 +1934,10 @@ impl AssetpackBuilderForWonderdraft {
             if ui.button("Delete sprite").clicked() {
                 delete = true;
             }
+        }
+
+        if sprite_history_changed {
+            self.sync_sprite_crop_to_source(sprite_index);
         }
 
         if run_remove_color {
@@ -1939,6 +2091,39 @@ impl AssetpackBuilderForWonderdraft {
             }
         }
 
+        if let (Some(pointer), Some(selected_id)) = (response.hover_pos(), self.selected_crop) {
+            if let Some(crop) = self.sources[source_index]
+                .crops
+                .iter()
+                .find(|crop| crop.id == selected_id)
+            {
+                let crop_rect = crop_to_screen_rect(crop, image_rect, image_w, image_h);
+                if let Some(handle) = hit_crop_handle(pointer, crop_rect) {
+                    response.clone().on_hover_cursor(crop_resize_cursor(handle));
+                } else if crop_rect.contains(pointer) {
+                    response.clone().on_hover_cursor(CursorIcon::Grab);
+                }
+            }
+        }
+
+        if response.double_clicked_by(PointerButton::Primary) {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                if let Some(point) = screen_to_image(pointer, image_rect, image_w, image_h) {
+                    if let Some(crop_id) = self.sources[source_index]
+                        .crops
+                        .iter()
+                        .rev()
+                        .find(|crop| point_in_crop(point, crop))
+                        .map(|crop| crop.id)
+                    {
+                        self.selected_crop = Some(crop_id);
+                        self.extract_selected_crop();
+                        return;
+                    }
+                }
+            }
+        }
+
         if response.drag_started_by(PointerButton::Primary)
             || response.clicked_by(PointerButton::Primary)
         {
@@ -1985,6 +2170,16 @@ impl AssetpackBuilderForWonderdraft {
             }
         } else {
             self.handle_select_move_crop(&response, image_rect, image_w, image_h, source_index);
+        }
+
+        if ui.input(|input| input.pointer.button_down(PointerButton::Primary)) {
+            match self.crop_drag.as_ref() {
+                Some(CropDrag::Move { .. }) => ui.ctx().set_cursor_icon(CursorIcon::AllScroll),
+                Some(CropDrag::Resize { handle, .. }) => {
+                    ui.ctx().set_cursor_icon(crop_resize_cursor(*handle));
+                }
+                None => {}
+            }
         }
     }
 
@@ -2054,13 +2249,7 @@ impl AssetpackBuilderForWonderdraft {
             {
                 let crop_rect = crop_to_screen_rect(crop, image_rect, image_w, image_h);
                 if let Some(handle) = hit_crop_handle(pointer, crop_rect) {
-                    let cursor = match handle {
-                        CropHandle::North | CropHandle::South => CursorIcon::ResizeVertical,
-                        CropHandle::East | CropHandle::West => CursorIcon::ResizeHorizontal,
-                        CropHandle::NorthWest | CropHandle::SouthEast => CursorIcon::ResizeNwSe,
-                        CropHandle::NorthEast | CropHandle::SouthWest => CursorIcon::ResizeNeSw,
-                    };
-                    response.clone().on_hover_cursor(cursor);
+                    response.clone().on_hover_cursor(crop_resize_cursor(handle));
                 } else if point_in_crop(
                     screen_to_image_clamped(pointer, image_rect, image_w, image_h)
                         .unwrap_or((-1.0, -1.0)),
@@ -2216,7 +2405,17 @@ impl AssetpackBuilderForWonderdraft {
             return;
         };
 
-        let (texture_id, image_w, image_h, radius, offset_x, offset_y, kind) = {
+        let (
+            texture_id,
+            image_w,
+            image_h,
+            radius,
+            offset_x,
+            offset_y,
+            kind,
+            source_id,
+            crop_bounds,
+        ) = {
             let sprite = &mut self.sprites[sprite_index];
             let color_image = rgba_to_color_image(&sprite.working);
             if sprite.texture.is_none() {
@@ -2240,8 +2439,46 @@ impl AssetpackBuilderForWonderdraft {
                 sprite.offset_x,
                 sprite.offset_y,
                 sprite.kind,
+                sprite.source_id,
+                sprite.crop_bounds.clone(),
             )
         };
+
+        let (crop_mode_held, hide_overlays, pick_color_held) = ui.input(|input| {
+            (
+                self.settings.shortcuts.sprite_crop_mode.held(input),
+                self.settings.shortcuts.sprite_hide_overlays.held(input),
+                self.settings.shortcuts.sprite_pick_color.held(input)
+                    || self
+                        .settings
+                        .shortcuts
+                        .sprite_pick_color_alternate
+                        .held(input),
+            )
+        });
+        let crop_mode = crop_mode_held || self.sprite_crop_drag.is_some();
+        let effective_tool = if pick_color_held {
+            SpriteTool::PickColor
+        } else {
+            self.sprite_tool
+        };
+        let wheel_adjust_held = ui.input(|input| match effective_tool {
+            SpriteTool::Erase => self
+                .settings
+                .shortcuts
+                .sprite_erase_wheel_adjust
+                .held(input),
+            SpriteTool::Restore => self
+                .settings
+                .shortcuts
+                .sprite_restore_wheel_adjust
+                .held(input),
+            SpriteTool::PickColor => self
+                .settings
+                .shortcuts
+                .sprite_pick_tolerance_wheel_adjust
+                .held(input),
+        });
 
         let fitted_rect = fit_image_rect(canvas_rect.shrink(20.0), image_w, image_h);
         let mut image_rect = Rect::from_center_size(
@@ -2258,13 +2495,31 @@ impl AssetpackBuilderForWonderdraft {
                 )
             });
             if scroll.abs() > 0.0 && pointer.is_some_and(|pointer| image_rect.contains(pointer)) {
-                zoom_at_pointer(
-                    &mut self.sprite_zoom,
-                    &mut self.sprite_pan,
-                    pointer.expect("checked above"),
-                    canvas_rect.center(),
-                    (scroll * 0.0015).exp(),
-                );
+                if wheel_adjust_held && !crop_mode {
+                    let direction = scroll.signum();
+                    match effective_tool {
+                        SpriteTool::Erase => {
+                            self.erase_brush_size =
+                                (self.erase_brush_size + direction * 2.0).clamp(1.0, 300.0);
+                        }
+                        SpriteTool::Restore => {
+                            self.restore_brush_size =
+                                (self.restore_brush_size + direction * 2.0).clamp(1.0, 300.0);
+                        }
+                        SpriteTool::PickColor => {
+                            self.tolerance =
+                                (self.tolerance as i16 + direction as i16).clamp(0, 255) as u8;
+                        }
+                    }
+                } else {
+                    zoom_at_pointer(
+                        &mut self.sprite_zoom,
+                        &mut self.sprite_pan,
+                        pointer.expect("checked above"),
+                        canvas_rect.center(),
+                        (scroll * 0.0015).exp(),
+                    );
+                }
             }
             if middle_down {
                 self.sprite_pan += pointer_delta;
@@ -2288,25 +2543,36 @@ impl AssetpackBuilderForWonderdraft {
             Stroke::new(1.0, Color32::GRAY),
             StrokeKind::Inside,
         );
-
-        let (crop_mode_held, hide_overlays, pick_color_held) = ui.input(|input| {
-            (
-                self.settings.shortcuts.sprite_crop_mode.held(input),
-                self.settings.shortcuts.sprite_hide_overlays.held(input),
-                self.settings.shortcuts.sprite_pick_color.held(input)
-                    || self
-                        .settings
-                        .shortcuts
-                        .sprite_pick_color_alternate
-                        .held(input),
-            )
-        });
-        let crop_mode = crop_mode_held || self.sprite_crop_drag.is_some();
-        let effective_tool = if pick_color_held {
-            SpriteTool::PickColor
-        } else {
-            self.sprite_tool
-        };
+        let crop_allowed_rect = self
+            .source_index(source_id)
+            .map(|source_index| {
+                let source = &self.sources[source_index];
+                let scale_x = image_rect.width() / image_w.max(1) as f32;
+                let scale_y = image_rect.height() / image_h.max(1) as f32;
+                Rect::from_min_max(
+                    pos2(
+                        image_rect.left() - crop_bounds.x as f32 * scale_x,
+                        image_rect.top() - crop_bounds.y as f32 * scale_y,
+                    ),
+                    pos2(
+                        image_rect.right()
+                            + source
+                                .image
+                                .width()
+                                .saturating_sub(crop_bounds.x.saturating_add(image_w))
+                                as f32
+                                * scale_x,
+                        image_rect.bottom()
+                            + source
+                                .image
+                                .height()
+                                .saturating_sub(crop_bounds.y.saturating_add(image_h))
+                                as f32
+                                * scale_y,
+                    ),
+                )
+            })
+            .unwrap_or(image_rect);
 
         let overlay = if kind.is_sprite() && !hide_overlays && !crop_mode {
             let scale_x = image_rect.width() / image_w.max(1) as f32;
@@ -2345,18 +2611,22 @@ impl AssetpackBuilderForWonderdraft {
         if crop_mode {
             paint_sprite_crop_handles(&painter, image_rect);
             if let Some(drag) = self.sprite_crop_drag {
-                let preview = sprite_crop_preview_rect(image_rect, drag);
+                let preview = sprite_crop_preview_rect(image_rect, crop_allowed_rect, drag);
                 painter.rect_filled(
                     image_rect,
                     0.0,
                     Color32::from_rgba_unmultiplied(0, 0, 0, 80),
                 );
-                painter.image(
-                    texture_id,
-                    preview,
-                    screen_rect_to_uv(preview, image_rect),
-                    Color32::WHITE,
-                );
+                paint_checkerboard(&painter, preview, 14.0);
+                let existing_pixels = preview.intersect(image_rect);
+                if existing_pixels.is_positive() {
+                    painter.image(
+                        texture_id,
+                        existing_pixels,
+                        screen_rect_to_uv(existing_pixels, image_rect),
+                        Color32::WHITE,
+                    );
+                }
                 paint_shadowed_rect_stroke(&painter, preview, Stroke::new(2.0, Color32::YELLOW));
             }
             if self.handle_sprite_crop_interaction(
@@ -2365,6 +2635,7 @@ impl AssetpackBuilderForWonderdraft {
                 image_w,
                 image_h,
                 sprite_index,
+                crop_allowed_rect,
             ) {
                 return;
             }
@@ -2391,9 +2662,11 @@ impl AssetpackBuilderForWonderdraft {
                     && !crop_mode
                     && !overlay_hit
                 {
-                    let radius_points =
-                        (self.brush_size * 0.5) * (image_rect.width() / image_w.max(1) as f32);
-                    painter.circle_stroke(pos, radius_points, Stroke::new(1.5, Color32::WHITE));
+                    if let Some(brush_size) = self.active_brush_size(effective_tool) {
+                        let radius_points =
+                            (brush_size * 0.5) * (image_rect.width() / image_w.max(1) as f32);
+                        painter.circle_stroke(pos, radius_points, Stroke::new(1.5, Color32::WHITE));
+                    }
                 }
             }
         }
@@ -2406,6 +2679,7 @@ impl AssetpackBuilderForWonderdraft {
         image_w: u32,
         image_h: u32,
         sprite_index: usize,
+        crop_allowed_rect: Rect,
     ) -> bool {
         if let Some(pointer) = response.hover_pos() {
             if let Some(handle) = hit_crop_handle_with_radius(pointer, image_rect, 20.0) {
@@ -2438,43 +2712,69 @@ impl AssetpackBuilderForWonderdraft {
             let Some(drag) = self.sprite_crop_drag.take() else {
                 return false;
             };
-            let preview = sprite_crop_preview_rect(image_rect, drag);
-            let uv = screen_rect_to_uv(preview, image_rect);
-            let x0 = (uv.min.x * image_w as f32)
-                .floor()
-                .clamp(0.0, image_w.saturating_sub(1) as f32) as u32;
-            let y0 = (uv.min.y * image_h as f32)
-                .floor()
-                .clamp(0.0, image_h.saturating_sub(1) as f32) as u32;
-            let x1 = (uv.max.x * image_w as f32)
-                .ceil()
-                .clamp((x0 + 1) as f32, image_w as f32) as u32;
-            let y1 = (uv.max.y * image_h as f32)
-                .ceil()
-                .clamp((y0 + 1) as f32, image_h as f32) as u32;
-            if x0 == 0 && y0 == 0 && x1 == image_w && y1 == image_h {
+            let preview = sprite_crop_preview_rect(image_rect, crop_allowed_rect, drag);
+            let scale_x = image_rect.width() / image_w.max(1) as f32;
+            let scale_y = image_rect.height() / image_h.max(1) as f32;
+            let local_x0 = ((preview.left() - image_rect.left()) / scale_x).floor() as i32;
+            let local_y0 = ((preview.top() - image_rect.top()) / scale_y).floor() as i32;
+            let local_x1 = ((preview.right() - image_rect.left()) / scale_x).ceil() as i32;
+            let local_y1 = ((preview.bottom() - image_rect.top()) / scale_y).ceil() as i32;
+            if local_x0 == 0
+                && local_y0 == 0
+                && local_x1 == image_w as i32
+                && local_y1 == image_h as i32
+            {
                 return false;
             }
 
-            let sprite = &mut self.sprites[sprite_index];
-            sprite.push_undo();
-            sprite.original = crop_rgba(&sprite.original, x0, y0, x1 - x0, y1 - y0);
-            sprite.working = crop_rgba(&sprite.working, x0, y0, x1 - x0, y1 - y0);
-            adjust_offsets_after_sprite_crop(
-                &mut sprite.offset_x,
-                &mut sprite.offset_y,
-                image_w,
-                image_h,
-                x0,
-                y0,
-                x1 - x0,
-                y1 - y0,
-            );
-            sprite.texture_dirty = true;
+            let source_id = self.sprites[sprite_index].source_id;
+            let old_bounds = self.sprites[sprite_index].crop_bounds.clone();
+            let old_working = self.sprites[sprite_index].working.clone();
+            let Some(source_index) = self.source_index(source_id) else {
+                return false;
+            };
+            let source = &self.sources[source_index].image;
+            let source_w = source.width() as i64;
+            let source_h = source.height() as i64;
+            let global_x0 =
+                (old_bounds.x as i64 + local_x0 as i64).clamp(0, source_w.saturating_sub(1));
+            let global_y0 =
+                (old_bounds.y as i64 + local_y0 as i64).clamp(0, source_h.saturating_sub(1));
+            let global_x1 = (old_bounds.x as i64 + local_x1 as i64).clamp(global_x0 + 1, source_w);
+            let global_y1 = (old_bounds.y as i64 + local_y1 as i64).clamp(global_y0 + 1, source_h);
+            let mut new_bounds = old_bounds.clone();
+            new_bounds.x = global_x0 as u32;
+            new_bounds.y = global_y0 as u32;
+            new_bounds.width = (global_x1 - global_x0) as u32;
+            new_bounds.height = (global_y1 - global_y0) as u32;
+            let (new_original, new_working) =
+                reframe_sprite_from_source(source, &old_working, &old_bounds, &new_bounds);
+            let actual_local_x0 = new_bounds.x as i64 - old_bounds.x as i64;
+            let actual_local_y0 = new_bounds.y as i64 - old_bounds.y as i64;
+
+            {
+                let sprite = &mut self.sprites[sprite_index];
+                sprite.push_undo();
+                sprite.crop_bounds = new_bounds;
+                sprite.original = new_original;
+                sprite.working = new_working;
+                adjust_offsets_after_sprite_reframe(
+                    &mut sprite.offset_x,
+                    &mut sprite.offset_y,
+                    image_w,
+                    image_h,
+                    actual_local_x0 as i32,
+                    actual_local_y0 as i32,
+                    sprite.crop_bounds.width,
+                    sprite.crop_bounds.height,
+                );
+                sprite.texture_dirty = true;
+            }
+            self.sync_sprite_crop_to_source(sprite_index);
             self.status = format!(
                 "Cropped sprite to {} × {} px. Undo restores the previous bounds.",
-                x1 - x0,
-                y1 - y0
+                self.sprites[sprite_index].crop_bounds.width,
+                self.sprites[sprite_index].crop_bounds.height,
             );
             return true;
         }
@@ -2498,8 +2798,12 @@ impl AssetpackBuilderForWonderdraft {
                 let pivot_hit = pointer.distance(overlay.pivot) <= SPRITE_PIVOT_HIT_RADIUS;
                 let radius_hit =
                     (pointer.distance(overlay.pivot) - overlay.radius_screen).abs() <= 10.0;
-                if pivot_hit || radius_hit {
+                if pivot_hit {
                     response.clone().on_hover_cursor(CursorIcon::Grab);
+                } else if radius_hit {
+                    response
+                        .clone()
+                        .on_hover_cursor(radius_resize_cursor(overlay.pivot, pointer));
                 }
             }
 
@@ -2516,6 +2820,19 @@ impl AssetpackBuilderForWonderdraft {
             }
 
             if let Some(drag_target) = self.sprite_overlay_drag {
+                match drag_target {
+                    SpriteOverlayDrag::Pivot => {
+                        response.clone().on_hover_cursor(CursorIcon::AllScroll);
+                        response.ctx.set_cursor_icon(CursorIcon::AllScroll);
+                    }
+                    SpriteOverlayDrag::Radius => {
+                        if let Some(pointer) = response.interact_pointer_pos() {
+                            let cursor = radius_resize_cursor(overlay.pivot, pointer);
+                            response.clone().on_hover_cursor(cursor);
+                            response.ctx.set_cursor_icon(cursor);
+                        }
+                    }
+                }
                 if response.dragged_by(PointerButton::Primary) {
                     if let Some(pointer) = response.interact_pointer_pos() {
                         match drag_target {
@@ -2568,7 +2885,7 @@ impl AssetpackBuilderForWonderdraft {
             SpriteTool::Restore => BrushMode::Restore,
             SpriteTool::PickColor => return,
         };
-        let radius_pixels = self.brush_size * 0.5;
+        let radius_pixels = self.active_brush_size(effective_tool).unwrap_or(1.0) * 0.5;
 
         if response.drag_started_by(PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos() {
@@ -2746,6 +3063,60 @@ impl eframe::App for AssetpackBuilderForWonderdraft {
         self.settings_window(&ctx);
         self.paint_drop_overlay(&ctx);
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SliderWheel {
+    Linear(f64),
+    Multiplicative(f64),
+}
+
+fn add_wheel_slider<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    range: RangeInclusive<T>,
+    wheel: SliderWheel,
+    text: Option<&str>,
+    show_value: bool,
+    logarithmic: bool,
+) -> egui::Response {
+    let min = range.start().to_f64().min(range.end().to_f64());
+    let max = range.start().to_f64().max(range.end().to_f64());
+    let keyboard_step = match wheel {
+        SliderWheel::Linear(step) => step,
+        SliderWheel::Multiplicative(_) => ((max - min) / 100.0).max(0.01),
+    };
+    let mut slider = egui::Slider::new(value, range).step_by(keyboard_step);
+    if let Some(text) = text {
+        slider = slider.text(text);
+    }
+    if !show_value {
+        slider = slider.show_value(false);
+    }
+    if logarithmic {
+        slider = slider.logarithmic(true);
+    }
+    let mut response = ui.add(slider);
+    if response.clicked() || response.drag_started() {
+        response.request_focus();
+    }
+
+    if response.hovered() {
+        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+        if scroll.abs() > f32::EPSILON {
+            let current = value.to_f64();
+            let next = match wheel {
+                SliderWheel::Linear(step) => current + step.copysign(scroll as f64),
+                SliderWheel::Multiplicative(factor) if scroll > 0.0 => current * factor,
+                SliderWheel::Multiplicative(factor) => current / factor,
+            }
+            .clamp(min, max);
+            *value = T::from_f64(next);
+            response.mark_changed();
+            ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+        }
+    }
+    response
 }
 
 fn path_setting_row(ui: &mut egui::Ui, path: &mut Option<PathBuf>, dialog_title: &str) {
@@ -3023,7 +3394,22 @@ fn crop_resize_cursor(handle: CropHandle) -> CursorIcon {
     }
 }
 
-fn sprite_crop_preview_rect(image_rect: Rect, drag: SpriteCropDrag) -> Rect {
+fn radius_resize_cursor(pivot: Pos2, pointer: Pos2) -> CursorIcon {
+    let delta = pointer - pivot;
+    let abs_x = delta.x.abs();
+    let abs_y = delta.y.abs();
+    if abs_x > abs_y * 2.0 {
+        CursorIcon::ResizeHorizontal
+    } else if abs_y > abs_x * 2.0 {
+        CursorIcon::ResizeVertical
+    } else if delta.x.signum() == delta.y.signum() {
+        CursorIcon::ResizeNwSe
+    } else {
+        CursorIcon::ResizeNeSw
+    }
+}
+
+fn sprite_crop_preview_rect(image_rect: Rect, allowed_rect: Rect, drag: SpriteCropDrag) -> Rect {
     let delta = drag.current - drag.start;
     let mut left = image_rect.left();
     let mut right = image_rect.right();
@@ -3035,25 +3421,25 @@ fn sprite_crop_preview_rect(image_rect: Rect, drag: SpriteCropDrag) -> Rect {
         drag.handle,
         CropHandle::NorthWest | CropHandle::West | CropHandle::SouthWest
     ) {
-        left = (left + delta.x).clamp(image_rect.left(), right - minimum);
+        left = (left + delta.x).clamp(allowed_rect.left(), right - minimum);
     }
     if matches!(
         drag.handle,
         CropHandle::NorthEast | CropHandle::East | CropHandle::SouthEast
     ) {
-        right = (right + delta.x).clamp(left + minimum, image_rect.right());
+        right = (right + delta.x).clamp(left + minimum, allowed_rect.right());
     }
     if matches!(
         drag.handle,
         CropHandle::NorthWest | CropHandle::North | CropHandle::NorthEast
     ) {
-        top = (top + delta.y).clamp(image_rect.top(), bottom - minimum);
+        top = (top + delta.y).clamp(allowed_rect.top(), bottom - minimum);
     }
     if matches!(
         drag.handle,
         CropHandle::SouthWest | CropHandle::South | CropHandle::SouthEast
     ) {
-        bottom = (bottom + delta.y).clamp(top + minimum, image_rect.bottom());
+        bottom = (bottom + delta.y).clamp(top + minimum, allowed_rect.bottom());
     }
     Rect::from_min_max(pos2(left, top), pos2(right, bottom))
 }
@@ -3129,6 +3515,61 @@ fn paint_sprite_crop_handles(painter: &egui::Painter, rect: Rect) {
     }
 }
 
+fn reframe_sprite_from_source(
+    source: &RgbaImage,
+    old_working: &RgbaImage,
+    old_bounds: &CropRegion,
+    new_bounds: &CropRegion,
+) -> (RgbaImage, RgbaImage) {
+    let original = crop_rgba(
+        source,
+        new_bounds.x,
+        new_bounds.y,
+        new_bounds.width,
+        new_bounds.height,
+    );
+    let mut working = original.clone();
+    let overlap_left = old_bounds.x.max(new_bounds.x);
+    let overlap_top = old_bounds.y.max(new_bounds.y);
+    let overlap_right = old_bounds
+        .x
+        .saturating_add(old_working.width())
+        .min(new_bounds.x.saturating_add(new_bounds.width));
+    let overlap_bottom = old_bounds
+        .y
+        .saturating_add(old_working.height())
+        .min(new_bounds.y.saturating_add(new_bounds.height));
+
+    for source_y in overlap_top..overlap_bottom {
+        for source_x in overlap_left..overlap_right {
+            let old_x = source_x - old_bounds.x;
+            let old_y = source_y - old_bounds.y;
+            let new_x = source_x - new_bounds.x;
+            let new_y = source_y - new_bounds.y;
+            working.put_pixel(new_x, new_y, *old_working.get_pixel(old_x, old_y));
+        }
+    }
+    (original, working)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adjust_offsets_after_sprite_reframe(
+    offset_x: &mut i32,
+    offset_y: &mut i32,
+    old_width: u32,
+    old_height: u32,
+    crop_x: i32,
+    crop_y: i32,
+    new_width: u32,
+    new_height: u32,
+) {
+    let pivot_x = old_width as f32 / 2.0 + *offset_x as f32;
+    let pivot_y = old_height as f32 / 2.0 - *offset_y as f32;
+    *offset_x = (pivot_x - crop_x as f32 - new_width as f32 / 2.0).round() as i32;
+    *offset_y = (new_height as f32 / 2.0 - (pivot_y - crop_y as f32)).round() as i32;
+}
+
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn adjust_offsets_after_sprite_crop(
     offset_x: &mut i32,
@@ -3140,10 +3581,16 @@ fn adjust_offsets_after_sprite_crop(
     new_width: u32,
     new_height: u32,
 ) {
-    let pivot_x = old_width as f32 / 2.0 + *offset_x as f32;
-    let pivot_y = old_height as f32 / 2.0 - *offset_y as f32;
-    *offset_x = (pivot_x - crop_x as f32 - new_width as f32 / 2.0).round() as i32;
-    *offset_y = (new_height as f32 / 2.0 - (pivot_y - crop_y as f32)).round() as i32;
+    adjust_offsets_after_sprite_reframe(
+        offset_x,
+        offset_y,
+        old_width,
+        old_height,
+        crop_x as i32,
+        crop_y as i32,
+        new_width,
+        new_height,
+    );
 }
 
 fn resize_crop_from_drag(
@@ -3570,6 +4017,7 @@ mod tests {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 80.0));
         let preview = sprite_crop_preview_rect(
             rect,
+            rect,
             SpriteCropDrag {
                 handle: CropHandle::NorthWest,
                 start: rect.left_top(),
@@ -3580,6 +4028,40 @@ mod tests {
             preview,
             Rect::from_min_max(pos2(20.0, 10.0), pos2(100.0, 80.0))
         );
+    }
+
+    #[test]
+    fn sprite_crop_preview_can_expand_beyond_current_image() {
+        let rect = Rect::from_min_size(pos2(20.0, 10.0), vec2(100.0, 80.0));
+        let allowed = Rect::from_min_max(pos2(0.0, 0.0), pos2(150.0, 120.0));
+        let preview = sprite_crop_preview_rect(
+            rect,
+            allowed,
+            SpriteCropDrag {
+                handle: CropHandle::NorthWest,
+                start: rect.left_top(),
+                current: pos2(5.0, 2.0),
+            },
+        );
+        assert_eq!(preview.min, pos2(5.0, 2.0));
+        assert_eq!(preview.max, rect.max);
+    }
+
+    #[test]
+    fn expanding_sprite_crop_preserves_edits_and_restores_source_pixels() {
+        let mut source = RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
+        source.put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        let old_bounds = crop(1, 1, 2, 2);
+        let mut old_working = crop_rgba(&source, 1, 1, 2, 2);
+        old_working.put_pixel(0, 0, image::Rgba([99, 88, 77, 0]));
+        let new_bounds = crop(0, 0, 4, 4);
+
+        let (original, working) =
+            reframe_sprite_from_source(&source, &old_working, &old_bounds, &new_bounds);
+
+        assert_eq!(*original.get_pixel(0, 0), image::Rgba([1, 2, 3, 255]));
+        assert_eq!(*working.get_pixel(1, 1), image::Rgba([99, 88, 77, 0]));
+        assert_eq!(*working.get_pixel(0, 0), image::Rgba([1, 2, 3, 255]));
     }
 
     #[test]

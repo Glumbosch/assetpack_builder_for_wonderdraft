@@ -219,6 +219,7 @@ pub fn save_project(
             id: sprite.id,
             source_id: sprite.source_id,
             crop_id: sprite.crop_id,
+            crop_bounds: Some(sprite.crop_bounds.clone()),
             original_file: original_rel,
             working_file: working_rel,
             name: sprite.name.clone(),
@@ -305,10 +306,29 @@ pub fn load_project(project_path: &Path) -> Result<LoadedProject> {
         let working = image::open(&working_path)
             .with_context(|| format!("Could not open {}", working_path.display()))?
             .to_rgba8();
+        let crop_bounds = sprite.crop_bounds.unwrap_or_else(|| {
+            sources
+                .iter()
+                .find(|source| source.id == sprite.source_id)
+                .and_then(|source| source.crops.iter().find(|crop| crop.id == sprite.crop_id))
+                .cloned()
+                .unwrap_or_else(|| {
+                    let mut crop = crate::model::CropRegion::new(
+                        sprite.crop_id,
+                        0,
+                        0,
+                        original.width(),
+                        original.height(),
+                    );
+                    crop.sprite_id = Some(sprite.id);
+                    crop
+                })
+        });
         sprites.push(SpriteAsset {
             id: sprite.id,
             source_id: sprite.source_id,
             crop_id: sprite.crop_id,
+            crop_bounds,
             original,
             working,
             name: sprite.name,

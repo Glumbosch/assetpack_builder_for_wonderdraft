@@ -164,6 +164,9 @@ pub struct ShortcutSettings {
     pub sprite_fit: ShortcutBinding,
     pub sprite_brush_smaller: ShortcutBinding,
     pub sprite_brush_larger: ShortcutBinding,
+    pub sprite_erase_wheel_adjust: ShortcutBinding,
+    pub sprite_restore_wheel_adjust: ShortcutBinding,
+    pub sprite_pick_tolerance_wheel_adjust: ShortcutBinding,
     pub sprite_undo: ShortcutBinding,
     pub sprite_redo: ShortcutBinding,
 }
@@ -226,6 +229,9 @@ impl Default for ShortcutSettings {
             sprite_fit: ShortcutBinding::plain(Key::F),
             sprite_brush_smaller: ShortcutBinding::plain(Key::OpenBracket),
             sprite_brush_larger: ShortcutBinding::plain(Key::CloseBracket),
+            sprite_erase_wheel_adjust: ShortcutBinding::modifier(ModifierKey::Control),
+            sprite_restore_wheel_adjust: ShortcutBinding::modifier(ModifierKey::Control),
+            sprite_pick_tolerance_wheel_adjust: ShortcutBinding::modifier(ModifierKey::Control),
             sprite_undo: ShortcutBinding::key(command, Key::Z),
             sprite_redo: ShortcutBinding::key(command_shift, Key::Z),
         }

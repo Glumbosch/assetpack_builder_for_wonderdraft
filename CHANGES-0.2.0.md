@@ -14,6 +14,9 @@
 - The collision-radius circle can be dragged to change the radius.
 - Added Ctrl+Z for undo and Ctrl+Shift+Z for redo in the sprite workspace.
 - Added zoom slider, mouse-wheel zoom, middle-button panning, and a **Fit** reset.
+- Added separate erase and restore brush diameters, editable Ctrl+wheel bindings for active-tool diameter/tolerance changes, and wheel plus arrow-key control for every slider.
+- Double-clicking a crop now extracts or opens its sprite. Alt-cropping a sprite can shrink or enlarge it against its source and keeps the Crop workspace region synchronized.
+- Crop, pivot, and radius dragging now use move or direction-matched resize cursors immediately, including newly drawn crop regions.
 - Mouse editing actions are restricted to the primary button so panning does not erase pixels.
 - Added crop-resize unit tests.
 

@@ -33,18 +33,6 @@ impl DrawMode {
             DrawMode::CustomColors => "Custom colors (RGB channels)",
         }
     }
-
-    pub fn emoji(self) -> &'static str {
-        match self {
-            DrawMode::Normal => "🖼️",
-            DrawMode::SampleColor => "🖌️",
-            DrawMode::CustomColors => "🎨",
-        }
-    }
-
-    pub fn display_label(self) -> String {
-        format!("{} {}", self.label(), self.emoji())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +147,7 @@ pub struct SpriteAsset {
     pub id: u64,
     pub source_id: u64,
     pub crop_id: u64,
+    pub crop_bounds: CropRegion,
     pub original: RgbaImage,
     pub working: RgbaImage,
     pub name: String,
@@ -176,6 +165,7 @@ pub struct SpriteAsset {
 }
 
 pub struct SpriteEditSnapshot {
+    crop_bounds: CropRegion,
     original: RgbaImage,
     working: RgbaImage,
     offset_x: i32,
@@ -216,6 +206,7 @@ impl SpriteAsset {
 
     fn snapshot(&self) -> SpriteEditSnapshot {
         SpriteEditSnapshot {
+            crop_bounds: self.crop_bounds.clone(),
             original: self.original.clone(),
             working: self.working.clone(),
             offset_x: self.offset_x,
@@ -224,6 +215,7 @@ impl SpriteAsset {
     }
 
     fn restore_snapshot(&mut self, snapshot: SpriteEditSnapshot) {
+        self.crop_bounds = snapshot.crop_bounds;
         self.original = snapshot.original;
         self.working = snapshot.working;
         self.offset_x = snapshot.offset_x;
@@ -342,6 +334,8 @@ pub struct SpriteRecord {
     pub id: u64,
     pub source_id: u64,
     pub crop_id: u64,
+    #[serde(default)]
+    pub crop_bounds: Option<CropRegion>,
     pub original_file: PathBuf,
     pub working_file: PathBuf,
     pub name: String,

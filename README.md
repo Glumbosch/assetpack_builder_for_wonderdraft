@@ -41,8 +41,7 @@ Privacy & Security on first launch.
 - Edit exact crop X, Y, width, and height values.
 - Optional square crop selection and aspect-ratio-preserving resize modes.
 - Copy crop regions and extract one crop or every unextracted crop as independent sprites.
-- Variable-size erase brush that sets alpha to zero.
-- Variable-size restore brush that copies the original RGBA pixel values back.
+- Independently sized erase and restore brushes; the active tool selects which diameter slider is shown.
 - Pick a color directly from a sprite.
 - Remove every pixel matching the picked color within a configurable tolerance.
 - Smart edge removal using the colors in the four corners and a flood fill from the image border.
@@ -50,7 +49,8 @@ Privacy & Security on first launch.
 - Convert alpha to fully transparent/opaque with an adjustable threshold.
 - Undo and redo for destructive sprite operations and brush strokes.
 - Checkerboard transparency preview.
-- Sprite canvas zoom slider, mouse-wheel zoom, middle-button panning, and Fit reset.
+- Sprite canvas zoom slider, mouse-wheel zoom, middle-button panning, and Fit reset. Ctrl+wheel adjusts the active brush or pick-color tolerance.
+- Every slider supports mouse-wheel changes while hovered and arrow-key changes while focused.
 - Keyboard undo with Ctrl+Z and redo with Ctrl+Shift+Z.
 - Per-sprite Wonderdraft settings:
   - display name
@@ -79,7 +79,7 @@ Privacy & Security on first launch.
 2. Select a source image. Imported images start with no crop regions.
 3. Choose **Draw crop** and drag around every sprite contained in the source image.
 4. Use **Select / move / resize** to move a crop or drag one of its eight handles.
-5. Use **Copy crop** for repeated layouts, then extract one crop or click **Extract all crops as sprites**.
+5. Use **Copy crop** for repeated layouts, then extract one crop, double-click it, or click **Extract all crops as sprites**. Double-clicking an already extracted crop opens its sprite.
 6. Switch among **Erase**, **Restore**, and **Pick color** in the sprite editor.
 7. Zoom with the wheel or zoom slider, pan with the middle mouse button, and reset with **Fit**.
 8. Drag the red pivot marker to set offsets, or drag the orange circle to set the radius.
@@ -131,7 +131,10 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 | Hold `Shift` | Hide and disable the pivot and radius handles; erase/restore clicks pass through normally |
 | Hold `Alt/Option` | Show sprite crop handles and enable crop resizing |
 | `F` | Fit the sprite and reset pan |
-| `[` / `]` | Decrease / increase the brush diameter |
+| `[` / `]` | Decrease / increase the selected erase or restore brush diameter |
+| Hold `Ctrl` + mouse wheel with Erase selected | Change the erase-brush diameter |
+| Hold `Ctrl` + mouse wheel with Restore selected | Change the restore-brush diameter |
+| Hold `Ctrl` + mouse wheel in Pick color mode | Change the color/alpha tolerance |
 | `Ctrl/Cmd+Z` | Undo the last transparency or sprite-crop edit |
 | `Ctrl/Cmd+Shift+Z` | Redo the last sprite edit |
 
@@ -143,8 +146,13 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 | Crop and sprite | Middle-button drag | Pan the image |
 | Crop | Primary-button drag outside crops | Draw a crop |
 | Crop | Primary-button drag inside a crop / on a crop handle | Move / resize the crop |
+| Crop | Double-click a crop | Extract it if needed, then open and select its sprite |
 | Sprite | Primary-button click or drag | Apply the active erase, restore, or pick-color tool |
-| Sprite while holding `Alt/Option` | Primary-button drag on a corner or edge marker | Crop from that corner or edge; corner handles resize in both directions |
+| Sprite while holding `Alt/Option` | Primary-button drag on a corner or edge marker | Shrink or enlarge the sprite crop within the source image; the linked crop in the Crop workspace updates too |
+| Any slider | Mouse wheel while hovered | Increase or decrease the slider value |
+| Any focused slider | Arrow Left/Right | Decrease or increase the slider value |
+
+The three Ctrl+mouse-wheel modifiers are editable independently under **Settings → Keyboard shortcuts**, alongside the other shortcuts. Crop edges and radius handles use matching resize cursors; moving crop regions or sprite pivots uses the four-direction move cursor.
 
 ## Install directly into Wonderdraft
 
