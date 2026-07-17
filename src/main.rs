@@ -5,6 +5,7 @@ mod export;
 mod image_ops;
 mod model;
 mod settings;
+mod shortcuts;
 
 use app::AssetpackBuilderForWonderdraft;
 

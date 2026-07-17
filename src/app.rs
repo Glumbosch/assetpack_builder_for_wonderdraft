@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{
-    self, pos2, vec2, Align2, Color32, ColorImage, ComboBox, CursorIcon, FontId, Key, Modifiers,
+    self, pos2, vec2, Align2, Color32, ColorImage, ComboBox, CursorIcon, FontId, Key,
     PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, TextureOptions, Vec2,
 };
 use image::{imageops, RgbaImage};
@@ -13,6 +13,8 @@ use crate::{
         smart_edge_remove, soften_alpha, threshold_alpha, BrushMode,
     },
     model::{AssetKind, CropRegion, DrawMode, SourceImage, SpriteAsset, ThemeDraft},
+    settings::AppSettings,
+    shortcuts::{ShortcutBinding, ShortcutSettings},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +76,13 @@ enum SpriteOverlayDrag {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct SpriteCropDrag {
+    handle: CropHandle,
+    start: Pos2,
+    current: Pos2,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct SpriteOverlay {
     pivot: Pos2,
     radius_screen: f32,
@@ -81,6 +90,9 @@ struct SpriteOverlay {
 }
 
 const SPRITE_PIVOT_HIT_RADIUS: f32 = 24.0;
+
+#[derive(Debug, Clone)]
+struct SourceDragPayload(u64);
 
 pub struct AssetpackBuilderForWonderdraft {
     pack_name: String,
@@ -103,8 +115,12 @@ pub struct AssetpackBuilderForWonderdraft {
     crop_drag_current: Option<(f32, f32)>,
     crop_drag: Option<CropDrag>,
     crop_zoom: f32,
+    crop_pan: Vec2,
+    square_selection: bool,
+    keep_aspect_ratio: bool,
 
     sprite_overlay_drag: Option<SpriteOverlayDrag>,
+    sprite_crop_drag: Option<SpriteCropDrag>,
     sprite_zoom: f32,
     sprite_pan: Vec2,
 
@@ -117,13 +133,27 @@ pub struct AssetpackBuilderForWonderdraft {
 
     project_path: Option<PathBuf>,
     install_root: Option<PathBuf>,
+    settings: AppSettings,
+    settings_draft: AppSettings,
+    settings_open: bool,
+    shortcut_capture: Option<&'static str>,
+    editing_sprite_name: Option<u64>,
+    source_drop_rect: Option<Rect>,
+    sprite_drop_rect: Option<Rect>,
     status: String,
 }
 
 impl Default for AssetpackBuilderForWonderdraft {
     fn default() -> Self {
+        let settings = crate::settings::load();
+        Self::from_settings(settings)
+    }
+}
+
+impl AssetpackBuilderForWonderdraft {
+    fn from_settings(settings: AppSettings) -> Self {
         Self {
-            pack_name: "MyFantasyPack".to_owned(),
+            pack_name: settings.default_pack_name.clone(),
             sources: Vec::new(),
             sprites: Vec::new(),
             themes: vec![ThemeDraft::default()],
@@ -140,7 +170,11 @@ impl Default for AssetpackBuilderForWonderdraft {
             crop_drag_current: None,
             crop_drag: None,
             crop_zoom: 1.0,
+            crop_pan: Vec2::ZERO,
+            square_selection: false,
+            keep_aspect_ratio: false,
             sprite_overlay_drag: None,
+            sprite_crop_drag: None,
             sprite_zoom: 1.0,
             sprite_pan: Vec2::ZERO,
             brush_size: 24.0,
@@ -150,13 +184,17 @@ impl Default for AssetpackBuilderForWonderdraft {
             last_brush_point: None,
             brush_history_active: false,
             project_path: None,
-            install_root: crate::settings::find_install_root(),
+            install_root: settings.install_directory.clone(),
+            settings_draft: settings.clone(),
+            settings,
+            settings_open: false,
+            shortcut_capture: None,
+            editing_sprite_name: None,
+            source_drop_rect: None,
+            sprite_drop_rect: None,
             status: "Import images or drag files into the window.".to_owned(),
         }
     }
-}
-
-impl AssetpackBuilderForWonderdraft {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.all_styles_mut(|style| {
@@ -200,6 +238,18 @@ impl AssetpackBuilderForWonderdraft {
         }
     }
 
+    fn import_sprite_dialog(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .add_filter(
+                "Images",
+                &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"],
+            )
+            .pick_files()
+        {
+            self.import_direct_sprite_paths(paths);
+        }
+    }
+
     fn import_paths<I>(&mut self, paths: I)
     where
         I: IntoIterator<Item = PathBuf>,
@@ -227,6 +277,7 @@ impl AssetpackBuilderForWonderdraft {
                     self.asset_view = AssetView::Crop;
                     self.crop_tool = CropTool::Draw;
                     self.crop_zoom = 1.0;
+                    self.crop_pan = Vec2::ZERO;
                     imported += 1;
                 }
                 Err(error) => errors.push(format!("{}: {error}", path.display())),
@@ -241,6 +292,41 @@ impl AssetpackBuilderForWonderdraft {
                 errors.join(" | ")
             )
         };
+    }
+
+    fn import_direct_sprite_paths<I>(&mut self, paths: I)
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let previous_count = self.sources.len();
+        self.import_paths(paths);
+        let source_ids = self.sources[previous_count..]
+            .iter()
+            .map(|source| source.id)
+            .collect::<Vec<_>>();
+        let mut extracted = 0;
+        for source_id in source_ids {
+            if self.extract_source_as_whole_sprite(source_id) {
+                extracted += 1;
+            }
+        }
+        self.status = format!("Imported and extracted {extracted} whole image(s) as sprites.");
+    }
+
+    fn extract_source_as_whole_sprite(&mut self, source_id: u64) -> bool {
+        let Some(source_index) = self.source_index(source_id) else {
+            return false;
+        };
+        let crop_id = self.alloc_id();
+        let (width, height) = self.sources[source_index].image.dimensions();
+        self.sources[source_index]
+            .crops
+            .push(CropRegion::new(crop_id, 0, 0, width, height));
+        self.selected_source = Some(source_id);
+        self.selected_crop = Some(crop_id);
+        let previous_count = self.sprites.len();
+        self.extract_selected_crop();
+        self.sprites.len() > previous_count
     }
 
     fn rotate_selected_source_clockwise(&mut self) {
@@ -290,7 +376,16 @@ impl AssetpackBuilderForWonderdraft {
             .collect::<Vec<_>>();
 
         if !paths.is_empty() {
-            self.import_paths(paths);
+            let pointer = ctx.input(|input| input.pointer.hover_pos());
+            let direct_to_sprites = pointer.is_some_and(|pointer| {
+                self.sprite_drop_rect
+                    .is_some_and(|rect| rect.contains(pointer))
+            });
+            if direct_to_sprites {
+                self.import_direct_sprite_paths(paths);
+            } else {
+                self.import_paths(paths);
+            }
         }
     }
 
@@ -312,45 +407,93 @@ impl AssetpackBuilderForWonderdraft {
             Stroke::new(4.0, Color32::LIGHT_BLUE),
             StrokeKind::Inside,
         );
+        let pointer = ctx.input(|input| input.pointer.hover_pos());
+        let direct_to_sprites = pointer.is_some_and(|pointer| {
+            self.sprite_drop_rect
+                .is_some_and(|drop_rect| drop_rect.contains(pointer))
+        });
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "Drop images anywhere to import them",
+            if direct_to_sprites {
+                "Drop here to import whole images as sprites"
+            } else {
+                "Drop here to import source images"
+            },
             FontId::proportional(28.0),
             Color32::WHITE,
         );
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.main_tab != MainTab::Assets || ctx.egui_wants_keyboard_input() {
+        if self.settings_open || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+
+        let shortcuts = self.settings.shortcuts.clone();
+        let pressed = |binding: ShortcutBinding| ctx.input(|input| binding.pressed(input));
+
+        if pressed(shortcuts.save_project_as) {
+            self.save_project_as_action();
+        } else if pressed(shortcuts.save_project) {
+            self.save_project_action();
+        } else if pressed(shortcuts.open_project) {
+            self.open_project_action();
+        } else if pressed(shortcuts.new_project) {
+            self.new_project();
+        } else if pressed(shortcuts.assets_tab) {
+            self.main_tab = MainTab::Assets;
+        } else if pressed(shortcuts.themes_tab) {
+            self.main_tab = MainTab::Themes;
+        }
+
+        if self.main_tab != MainTab::Assets {
             return;
         }
 
         if self.asset_view == AssetView::Crop {
-            self.handle_crop_shortcuts(ctx);
+            self.handle_crop_shortcuts(ctx, &shortcuts);
             return;
         }
 
-        let ctrl_shift = Modifiers {
-            ctrl: true,
-            shift: true,
-            ..Default::default()
-        };
+        if pressed(shortcuts.sprite_delete) || pressed(shortcuts.sprite_delete_alternate) {
+            self.delete_selected_sprite();
+            return;
+        }
+        let pan_step = 24.0;
+        if pressed(shortcuts.sprite_pan_left) {
+            self.sprite_pan.x -= pan_step;
+        }
+        if pressed(shortcuts.sprite_pan_right) {
+            self.sprite_pan.x += pan_step;
+        }
+        if pressed(shortcuts.sprite_pan_up) {
+            self.sprite_pan.y -= pan_step;
+        }
+        if pressed(shortcuts.sprite_pan_down) {
+            self.sprite_pan.y += pan_step;
+        }
+        if pressed(shortcuts.sprite_erase) {
+            self.sprite_tool = SpriteTool::Erase;
+            self.status = "Transparency tool: Erase.".to_owned();
+        }
+        if pressed(shortcuts.sprite_restore) {
+            self.sprite_tool = SpriteTool::Restore;
+            self.status = "Transparency tool: Restore.".to_owned();
+        }
+        if pressed(shortcuts.sprite_fit) {
+            self.sprite_zoom = 1.0;
+            self.sprite_pan = Vec2::ZERO;
+        }
+        if pressed(shortcuts.sprite_brush_smaller) {
+            self.brush_size = (self.brush_size - 2.0).max(1.0);
+        }
+        if pressed(shortcuts.sprite_brush_larger) {
+            self.brush_size = (self.brush_size + 2.0).min(300.0);
+        }
 
-        let redo = ctx.input_mut(|input| input.consume_key(ctrl_shift, Key::Z));
-        let undo = if redo {
-            false
-        } else {
-            ctx.input_mut(|input| {
-                input.consume_key(
-                    Modifiers {
-                        ctrl: true,
-                        ..Default::default()
-                    },
-                    Key::Z,
-                )
-            })
-        };
+        let redo = pressed(shortcuts.sprite_redo);
+        let undo = !redo && pressed(shortcuts.sprite_undo);
 
         let Some(sprite_index) = self.selected_sprite_index() else {
             return;
@@ -365,26 +508,70 @@ impl AssetpackBuilderForWonderdraft {
         }
     }
 
-    fn handle_crop_shortcuts(&mut self, ctx: &egui::Context) {
-        let (shift, left, right, up, down) = ctx.input_mut(|input| {
-            if input.modifiers.ctrl || input.modifiers.alt || input.modifiers.command {
-                return (false, false, false, false, false);
-            }
-            let shift = input.modifiers.shift;
-            let modifiers = Modifiers {
-                shift,
-                ..Default::default()
-            };
-            let left = input.consume_key(modifiers, Key::ArrowLeft)
-                || input.consume_key(modifiers, Key::A);
-            let right = input.consume_key(modifiers, Key::ArrowRight)
-                || input.consume_key(modifiers, Key::D);
-            let up =
-                input.consume_key(modifiers, Key::ArrowUp) || input.consume_key(modifiers, Key::W);
-            let down = input.consume_key(modifiers, Key::ArrowDown)
-                || input.consume_key(modifiers, Key::S);
-            (shift, left, right, up, down)
-        });
+    fn handle_crop_shortcuts(&mut self, ctx: &egui::Context, shortcuts: &ShortcutSettings) {
+        let pressed = |binding: ShortcutBinding| ctx.input(|input| binding.pressed(input));
+        if pressed(shortcuts.crop_delete) || pressed(shortcuts.crop_delete_alternate) {
+            self.delete_selected_crop();
+            return;
+        }
+        if pressed(shortcuts.crop_draw_tool) {
+            self.crop_tool = CropTool::Draw;
+        }
+        if pressed(shortcuts.crop_select_tool) {
+            self.crop_tool = CropTool::SelectMove;
+        }
+        if pressed(shortcuts.crop_fit) {
+            self.crop_zoom = 1.0;
+            self.crop_pan = Vec2::ZERO;
+        }
+        if pressed(shortcuts.crop_extract) {
+            self.extract_selected_crop();
+            return;
+        }
+        if pressed(shortcuts.crop_copy) {
+            self.copy_selected_crop();
+        }
+        if pressed(shortcuts.crop_cancel) {
+            self.crop_drag_start = None;
+            self.crop_drag_current = None;
+            self.crop_drag = None;
+        }
+
+        let pan_step = 24.0;
+        if pressed(shortcuts.crop_pan_left) {
+            self.crop_pan.x -= pan_step;
+        }
+        if pressed(shortcuts.crop_pan_right) {
+            self.crop_pan.x += pan_step;
+        }
+        if pressed(shortcuts.crop_pan_up) {
+            self.crop_pan.y -= pan_step;
+        }
+        if pressed(shortcuts.crop_pan_down) {
+            self.crop_pan.y += pan_step;
+        }
+
+        let resize_left =
+            pressed(shortcuts.crop_resize_left) || pressed(shortcuts.crop_resize_left_alternate);
+        let resize_right =
+            pressed(shortcuts.crop_resize_right) || pressed(shortcuts.crop_resize_right_alternate);
+        let resize_up =
+            pressed(shortcuts.crop_resize_up) || pressed(shortcuts.crop_resize_up_alternate);
+        let resize_down =
+            pressed(shortcuts.crop_resize_down) || pressed(shortcuts.crop_resize_down_alternate);
+        let resize = resize_left || resize_right || resize_up || resize_down;
+        let left = resize_left
+            || pressed(shortcuts.crop_move_left)
+            || pressed(shortcuts.crop_move_left_alternate);
+        let right = resize_right
+            || pressed(shortcuts.crop_move_right)
+            || pressed(shortcuts.crop_move_right_alternate);
+        let up = resize_up
+            || pressed(shortcuts.crop_move_up)
+            || pressed(shortcuts.crop_move_up_alternate);
+        let down = resize_down
+            || pressed(shortcuts.crop_move_down)
+            || pressed(shortcuts.crop_move_down_alternate);
 
         if !(left || right || up || down) {
             return;
@@ -404,11 +591,29 @@ impl AssetpackBuilderForWonderdraft {
             return;
         };
 
-        adjust_crop_with_keys(crop, source_w, source_h, shift, left, right, up, down);
+        let old_width = crop.width;
+        let old_height = crop.height;
+        adjust_crop_with_keys(crop, source_w, source_h, resize, left, right, up, down);
+        if resize && self.square_selection {
+            let side = if crop.width != old_width {
+                crop.width
+            } else {
+                crop.height
+            };
+            set_crop_square_side(crop, side, source_w, source_h);
+        } else if resize && self.keep_aspect_ratio {
+            let aspect = old_width as f32 / old_height.max(1) as f32;
+            if crop.width != old_width {
+                set_crop_aspect_from_width(crop, crop.width, aspect, source_w, source_h);
+            } else if crop.height != old_height {
+                set_crop_aspect_from_height(crop, crop.height, aspect, source_w, source_h);
+            }
+        }
     }
 
     fn new_project(&mut self) {
-        *self = Self::default();
+        let settings = self.settings.clone();
+        *self = Self::from_settings(settings);
         self.status = "Created a new project.".to_owned();
     }
 
@@ -491,9 +696,11 @@ impl AssetpackBuilderForWonderdraft {
         self.crop_drag_start = None;
         self.crop_drag_current = None;
         self.crop_zoom = 1.0;
+        self.crop_pan = Vec2::ZERO;
         self.sprite_zoom = 1.0;
         self.sprite_pan = Vec2::ZERO;
         self.sprite_overlay_drag = None;
+        self.sprite_crop_drag = None;
         self.crop_drag = None;
         self.project_path = Some(path.clone());
         self.status = if project.warnings.is_empty() {
@@ -508,7 +715,23 @@ impl AssetpackBuilderForWonderdraft {
     }
 
     fn export_action(&mut self) {
-        let Some(root) = rfd::FileDialog::new().pick_folder() else {
+        let root = if self.settings.export_without_asking {
+            self.settings.export_directory.clone()
+        } else {
+            let mut dialog =
+                rfd::FileDialog::new().set_title("Choose the Wonderdraft pack export folder");
+            if let Some(directory) = &self.settings.export_directory {
+                dialog = dialog.set_directory(directory);
+            }
+            dialog.pick_folder()
+        };
+        let Some(root) = root else {
+            self.status = if self.settings.export_without_asking {
+                "Set a default export folder in Settings, or disable export without asking."
+                    .to_owned()
+            } else {
+                "Export cancelled.".to_owned()
+            };
             return;
         };
         match export_pack(&root, &self.pack_name, &self.sprites, &self.themes) {
@@ -531,8 +754,12 @@ impl AssetpackBuilderForWonderdraft {
     }
 
     fn install_asset_pack_action(&mut self) {
-        let root = crate::settings::find_install_root()
+        let root = self
+            .settings
+            .install_directory
+            .clone()
             .or_else(|| self.install_root.clone())
+            .or_else(crate::settings::find_install_root)
             .or_else(|| {
                 let default = crate::settings::default_wonderdraft_folder();
                 let mut dialog = rfd::FileDialog::new().set_title(
@@ -553,6 +780,12 @@ impl AssetpackBuilderForWonderdraft {
         match export_pack(&root, &self.pack_name, &self.sprites, &self.themes) {
             Ok(report) => {
                 self.install_root = Some(root.clone());
+                self.settings.install_directory = Some(root.clone());
+                self.settings_draft = self.settings.clone();
+                if let Err(error) = crate::settings::save(&self.settings) {
+                    self.status = format!("Installed pack, but could not save settings: {error:#}");
+                    return;
+                }
                 let mut status = format!(
                     "Installed {} PNG(s), {} .wonderdraft_symbols file(s), and {} theme(s) into {}.",
                     report.png_files,
@@ -730,13 +963,15 @@ impl AssetpackBuilderForWonderdraft {
             .iter()
             .position(|crop| crop.id == crop_id)
         {
-            if self.sources[source_index].crops[index].sprite_id.is_some() {
-                self.status = "Delete the extracted sprite first, then delete its crop.".to_owned();
-                return;
-            }
+            let had_sprite = self.sources[source_index].crops[index].sprite_id.is_some();
             self.sources[source_index].crops.remove(index);
             self.selected_crop = self.sources[source_index].crops.first().map(|crop| crop.id);
-            self.status = "Deleted crop.".to_owned();
+            self.status = if had_sprite {
+                "Deleted crop. Its already-extracted sprite remains independently editable."
+                    .to_owned()
+            } else {
+                "Deleted crop.".to_owned()
+            };
         }
     }
 
@@ -781,17 +1016,206 @@ impl AssetpackBuilderForWonderdraft {
                     self.save_project_as_action();
                 }
                 ui.separator();
-                if ui.button("Import images").clicked() {
-                    self.import_dialog();
-                }
-                ui.separator();
                 ui.selectable_value(&mut self.main_tab, MainTab::Assets, "Assets");
                 ui.selectable_value(&mut self.main_tab, MainTab::Themes, "Themes");
                 ui.separator();
                 ui.label("Pack name:");
                 ui.add(egui::TextEdit::singleline(&mut self.pack_name).desired_width(180.0));
+                ui.separator();
+                if ui.button("Settings").clicked() {
+                    self.settings_draft = self.settings.clone();
+                    self.shortcut_capture = None;
+                    self.settings_open = true;
+                }
             });
         });
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let captured_binding = self.shortcut_capture.and_then(|_| {
+            ctx.input(|input| input.events.iter().find_map(ShortcutBinding::from_event))
+        });
+
+        let mut open = self.settings_open;
+        let mut save_clicked = false;
+        let mut cancel_clicked = false;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(650.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 150.0).max(300.0))
+                    .show(ui, |ui| {
+                        ui.heading("General");
+                        ui.label("Wonderdraft asset-pack install directory");
+                        path_setting_row(
+                            ui,
+                            &mut self.settings_draft.install_directory,
+                            "Choose install directory",
+                        );
+                        ui.add_space(8.0);
+
+                        ui.label("Default name for new packs");
+                        ui.text_edit_singleline(&mut self.settings_draft.default_pack_name);
+                        ui.add_space(8.0);
+
+                        ui.label("Default Wonderdraft pack export directory");
+                        path_setting_row(
+                            ui,
+                            &mut self.settings_draft.export_directory,
+                            "Choose export directory",
+                        );
+                        ui.checkbox(
+                            &mut self.settings_draft.export_without_asking,
+                            "Do not ask for an export directory; export to the default folder",
+                        );
+                        if self.settings_draft.export_without_asking
+                            && self.settings_draft.export_directory.is_none()
+                        {
+                            ui.colored_label(
+                                Color32::YELLOW,
+                                "Choose an export directory to use this option.",
+                            );
+                        }
+
+                        ui.separator();
+                        ui.heading("Keyboard shortcuts");
+                        ui.label(
+                            "Choose Change, then press a key or key combination. Modifier-only shortcuts such as Shift and Alt can also be assigned.",
+                        );
+                        let defaults = ShortcutSettings::default();
+                        macro_rules! shortcut_row {
+                            ($label:literal, $field:ident) => {
+                                shortcut_setting_row(
+                                    ui,
+                                    ctx,
+                                    $label,
+                                    stringify!($field),
+                                    &mut self.settings_draft.shortcuts.$field,
+                                    defaults.$field,
+                                    &mut self.shortcut_capture,
+                                    captured_binding,
+                                );
+                            };
+                        }
+
+                        ui.add_space(6.0);
+                        ui.strong("Application");
+                        shortcut_row!("New project", new_project);
+                        shortcut_row!("Open project", open_project);
+                        shortcut_row!("Save project", save_project);
+                        shortcut_row!("Save project as", save_project_as);
+                        shortcut_row!("Show Assets tab", assets_tab);
+                        shortcut_row!("Show Themes tab", themes_tab);
+
+                        ui.add_space(8.0);
+                        ui.strong("Crop workspace");
+                        shortcut_row!("Delete selected crop", crop_delete);
+                        shortcut_row!("Delete selected crop (alternate)", crop_delete_alternate);
+                        shortcut_row!("Pan view left", crop_pan_left);
+                        shortcut_row!("Pan view right", crop_pan_right);
+                        shortcut_row!("Pan view up", crop_pan_up);
+                        shortcut_row!("Pan view down", crop_pan_down);
+                        shortcut_row!("Move crop left", crop_move_left);
+                        shortcut_row!("Move crop right", crop_move_right);
+                        shortcut_row!("Move crop up", crop_move_up);
+                        shortcut_row!("Move crop down", crop_move_down);
+                        shortcut_row!("Move crop left (alternate)", crop_move_left_alternate);
+                        shortcut_row!("Move crop right (alternate)", crop_move_right_alternate);
+                        shortcut_row!("Move crop up (alternate)", crop_move_up_alternate);
+                        shortcut_row!("Move crop down (alternate)", crop_move_down_alternate);
+                        shortcut_row!("Resize crop left", crop_resize_left);
+                        shortcut_row!("Resize crop right", crop_resize_right);
+                        shortcut_row!("Resize crop up", crop_resize_up);
+                        shortcut_row!("Resize crop down", crop_resize_down);
+                        shortcut_row!("Resize crop left (alternate)", crop_resize_left_alternate);
+                        shortcut_row!("Resize crop right (alternate)", crop_resize_right_alternate);
+                        shortcut_row!("Resize crop up (alternate)", crop_resize_up_alternate);
+                        shortcut_row!("Resize crop down (alternate)", crop_resize_down_alternate);
+                        shortcut_row!("Draw-crop tool", crop_draw_tool);
+                        shortcut_row!("Select/move tool", crop_select_tool);
+                        shortcut_row!("Fit image", crop_fit);
+                        shortcut_row!("Extract selected crop", crop_extract);
+                        shortcut_row!("Copy selected crop", crop_copy);
+                        shortcut_row!("Cancel current crop interaction", crop_cancel);
+
+                        ui.add_space(8.0);
+                        ui.strong("Sprite settings workspace");
+                        shortcut_row!("Delete selected sprite", sprite_delete);
+                        shortcut_row!("Delete selected sprite (alternate)", sprite_delete_alternate);
+                        shortcut_row!("Pan view left", sprite_pan_left);
+                        shortcut_row!("Pan view right", sprite_pan_right);
+                        shortcut_row!("Pan view up", sprite_pan_up);
+                        shortcut_row!("Pan view down", sprite_pan_down);
+                        shortcut_row!("Erase tool", sprite_erase);
+                        shortcut_row!("Restore tool", sprite_restore);
+                        shortcut_row!("Temporarily pick color", sprite_pick_color);
+                        shortcut_row!("Temporarily pick color (alternate)", sprite_pick_color_alternate);
+                        shortcut_row!("Temporarily crop sprite", sprite_crop_mode);
+                        shortcut_row!("Hide pivot/radius overlays", sprite_hide_overlays);
+                        shortcut_row!("Fit image", sprite_fit);
+                        shortcut_row!("Decrease brush diameter", sprite_brush_smaller);
+                        shortcut_row!("Increase brush diameter", sprite_brush_larger);
+                        shortcut_row!("Undo sprite edit", sprite_undo);
+                        shortcut_row!("Redo sprite edit", sprite_redo);
+
+                        ui.add_space(8.0);
+                        if ui.button("Reset all keyboard shortcuts").clicked() {
+                            self.settings_draft.shortcuts = ShortcutSettings::default();
+                            self.shortcut_capture = None;
+                        }
+                    });
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    save_clicked = ui.button("Save settings").clicked();
+                    cancel_clicked = ui.button("Cancel").clicked();
+                });
+            });
+
+        if save_clicked {
+            if self.settings_draft.default_pack_name.trim().is_empty() {
+                self.status = "The default pack name cannot be empty.".to_owned();
+            } else if self.settings_draft.export_without_asking
+                && self.settings_draft.export_directory.is_none()
+            {
+                self.status =
+                    "Choose a default export folder before enabling automatic export.".to_owned();
+            } else {
+                self.settings_draft.default_pack_name =
+                    self.settings_draft.default_pack_name.trim().to_owned();
+                self.settings_draft.install_directory = self
+                    .settings_draft
+                    .install_directory
+                    .as_deref()
+                    .and_then(crate::settings::install_root_from_selection);
+                match crate::settings::save(&self.settings_draft) {
+                    Ok(()) => {
+                        self.settings = self.settings_draft.clone();
+                        self.install_root = self.settings.install_directory.clone();
+                        self.shortcut_capture = None;
+                        self.settings_open = false;
+                        self.status = "Saved settings.".to_owned();
+                    }
+                    Err(error) => self.status = format!("Could not save settings: {error:#}"),
+                }
+            }
+        } else if cancel_clicked {
+            self.settings_draft = self.settings.clone();
+            self.shortcut_capture = None;
+            self.settings_open = false;
+        } else {
+            self.settings_open = open;
+            if !open {
+                self.shortcut_capture = None;
+            }
+        }
     }
 
     fn status_bar(&mut self, root_ui: &mut egui::Ui) {
@@ -845,78 +1269,153 @@ impl AssetpackBuilderForWonderdraft {
             .default_size(250.0)
             .show(root_ui, |ui| {
                 ui.heading("Sources and sprites");
-                ui.horizontal(|ui| {
-                    if ui.button("Import").clicked() {
-                        self.import_dialog();
-                    }
-                    ui.label("Drag-and-drop is supported.");
-                });
                 ui.separator();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.strong("Source images");
-                    for source in &self.sources {
-                        let selected = self.selected_source == Some(source.id)
-                            && self.asset_view == AssetView::Crop;
-                        if ui
-                            .selectable_label(selected, source.display_name())
-                            .clicked()
-                        {
-                            self.selected_source = Some(source.id);
-                            self.selected_crop = source.crops.first().map(|crop| crop.id);
-                            self.asset_view = AssetView::Crop;
-                            self.crop_zoom = 1.0;
-                        }
-                    }
-
-                    if let Some(source_index) = self.selected_source_index() {
-                        ui.indent("crops", |ui| {
-                            for (index, crop) in self.sources[source_index].crops.iter().enumerate()
-                            {
-                                let suffix = if crop.sprite_id.is_some() { " ✓" } else { "" };
-                                if ui
-                                    .selectable_label(
-                                        self.selected_crop == Some(crop.id)
-                                            && self.asset_view == AssetView::Crop,
-                                        format!(
-                                            "Crop {} — {}×{}{}",
-                                            index + 1,
-                                            crop.width,
-                                            crop.height,
-                                            suffix
-                                        ),
-                                    )
-                                    .clicked()
-                                {
-                                    self.selected_crop = Some(crop.id);
-                                    self.asset_view = AssetView::Crop;
+                    let mut source_clicked = None;
+                    let source_section =
+                        egui::Frame::group(ui.style())
+                            .inner_margin(8.0)
+                            .show(ui, |ui| {
+                                ui.strong("Source images");
+                                if ui.button("Import source images…").clicked() {
+                                    self.import_dialog();
                                 }
-                            }
-                        });
+                                ui.label(
+                                    "Drop files here, or drag a source down to Extracted sprites.",
+                                );
+                                for source in &self.sources {
+                                    let selected = self.selected_source == Some(source.id)
+                                        && self.asset_view == AssetView::Crop;
+                                    let response = ui.add(
+                                        egui::Button::new(source.display_name())
+                                            .selected(selected)
+                                            .frame(false)
+                                            .sense(Sense::click_and_drag()),
+                                    );
+                                    response.dnd_set_drag_payload(SourceDragPayload(source.id));
+                                    if response.clicked() {
+                                        source_clicked = Some(source.id);
+                                    }
+                                }
+
+                                if let Some(source_index) = self.selected_source_index() {
+                                    ui.indent("crops", |ui| {
+                                        for (index, crop) in
+                                            self.sources[source_index].crops.iter().enumerate()
+                                        {
+                                            let suffix =
+                                                if crop.sprite_id.is_some() { " ✓" } else { "" };
+                                            if ui
+                                                .selectable_label(
+                                                    self.selected_crop == Some(crop.id)
+                                                        && self.asset_view == AssetView::Crop,
+                                                    format!(
+                                                        "Crop {} — {}×{}{}",
+                                                        index + 1,
+                                                        crop.width,
+                                                        crop.height,
+                                                        suffix
+                                                    ),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.selected_crop = Some(crop.id);
+                                                self.asset_view = AssetView::Crop;
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                    self.source_drop_rect = Some(source_section.response.rect);
+
+                    if let Some(source_id) = source_clicked {
+                        self.selected_source = Some(source_id);
+                        self.selected_crop = self
+                            .source_index(source_id)
+                            .and_then(|index| self.sources[index].crops.first())
+                            .map(|crop| crop.id);
+                        self.asset_view = AssetView::Crop;
+                        self.crop_zoom = 1.0;
+                        self.crop_pan = Vec2::ZERO;
                     }
 
                     ui.separator();
-                    ui.strong("Extracted sprites");
-                    for sprite in &self.sprites {
-                        let selected = self.selected_sprite == Some(sprite.id)
-                            && self.asset_view == AssetView::Sprite;
-                        if ui
-                            .selectable_label(
-                                selected,
-                                format!(
-                                    "{}  [{} / {}]",
-                                    sprite.name,
-                                    sprite.kind.label(),
-                                    sprite.category
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.selected_sprite = Some(sprite.id);
-                            self.asset_view = AssetView::Sprite;
-                            self.sprite_zoom = 1.0;
-                            self.sprite_pan = Vec2::ZERO;
-                            self.sprite_overlay_drag = None;
+                    let mut sprite_clicked = None;
+                    let mut finish_edit = false;
+                    let sprite_section =
+                        egui::Frame::group(ui.style())
+                            .inner_margin(8.0)
+                            .show(ui, |ui| {
+                                ui.strong("Extracted sprites");
+                                if ui.button("Import whole images as sprites…").clicked() {
+                                    self.import_sprite_dialog();
+                                }
+                                ui.label("Drop image files here to extract them without cropping.");
+                                for sprite in &mut self.sprites {
+                                    let selected = self.selected_sprite == Some(sprite.id)
+                                        && self.asset_view == AssetView::Sprite;
+                                    if self.editing_sprite_name == Some(sprite.id) {
+                                        ui.horizontal(|ui| {
+                                            let response = ui.add(
+                                                egui::TextEdit::singleline(&mut sprite.name)
+                                                    .desired_width(140.0),
+                                            );
+                                            if response.changed() {
+                                                sprite.file_stem.clone_from(&sprite.name);
+                                            }
+                                            ui.label(format!(
+                                                "[{} / {}] {}",
+                                                sprite.kind.label(),
+                                                sprite.category,
+                                                sprite.draw_mode.emoji()
+                                            ));
+                                            if response.lost_focus()
+                                                || ui.input(|input| input.key_pressed(Key::Enter))
+                                            {
+                                                finish_edit = true;
+                                            }
+                                        });
+                                    } else {
+                                        let response = ui.selectable_label(
+                                            selected,
+                                            format!(
+                                                "{}  [{} / {}] {}",
+                                                sprite.name,
+                                                sprite.kind.label(),
+                                                sprite.category,
+                                                sprite.draw_mode.emoji()
+                                            ),
+                                        );
+                                        if response.double_clicked() {
+                                            self.editing_sprite_name = Some(sprite.id);
+                                        } else if response.clicked() {
+                                            sprite_clicked = Some(sprite.id);
+                                        }
+                                    }
+                                }
+                            });
+                    self.sprite_drop_rect = Some(sprite_section.response.rect);
+                    let dropped_source = sprite_section
+                        .response
+                        .dnd_release_payload::<SourceDragPayload>()
+                        .map(|payload| payload.0);
+
+                    if finish_edit {
+                        self.editing_sprite_name = None;
+                    }
+                    if let Some(sprite_id) = sprite_clicked {
+                        self.selected_sprite = Some(sprite_id);
+                        self.asset_view = AssetView::Sprite;
+                        self.sprite_zoom = 1.0;
+                        self.sprite_pan = Vec2::ZERO;
+                        self.sprite_overlay_drag = None;
+                        self.sprite_crop_drag = None;
+                    }
+                    if let Some(source_id) = dropped_source {
+                        if self.extract_source_as_whole_sprite(source_id) {
+                            self.status =
+                                "Extracted the complete source image as a sprite.".to_owned();
                         }
                     }
                 });
@@ -946,8 +1445,18 @@ impl AssetpackBuilderForWonderdraft {
             ui.selectable_value(&mut self.crop_tool, CropTool::Draw, "Draw crop");
         });
         ui.label(
-            "Draw multiple crop rectangles. In Select mode, drag inside a crop to move it or drag its handles to resize it. Use the mouse wheel over the source image to zoom.",
+            "Draw multiple crop rectangles. In Select mode, drag inside a crop to move it or drag its handles to resize it. Wheel zoom stays anchored under the pointer; middle-drag pans.",
         );
+        let square_changed = ui
+            .checkbox(&mut self.square_selection, "Square selection")
+            .changed();
+        ui.checkbox(
+            &mut self.keep_aspect_ratio,
+            "Keep aspect ratio when resizing",
+        );
+        if self.square_selection {
+            ui.label("Square selection takes precedence over the original aspect ratio.");
+        }
         ui.separator();
 
         let Some(source_index) = self.selected_source_index() else {
@@ -955,12 +1464,29 @@ impl AssetpackBuilderForWonderdraft {
             return;
         };
         let (source_w, source_h) = self.sources[source_index].image.dimensions();
+        if square_changed && self.square_selection {
+            if let Some(crop_id) = self.selected_crop {
+                if let Some(crop) = self.sources[source_index]
+                    .crops
+                    .iter_mut()
+                    .find(|crop| crop.id == crop_id)
+                {
+                    reshape_crop_square(crop, source_w, source_h);
+                }
+            }
+        }
         ui.label(format!("Source: {source_w} × {source_h} px"));
-        ui.add(
-            egui::Slider::new(&mut self.crop_zoom, 0.1..=12.0)
-                .logarithmic(true)
-                .text("Zoom"),
-        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Slider::new(&mut self.crop_zoom, 0.1..=12.0)
+                    .logarithmic(true)
+                    .text("Zoom"),
+            );
+            if ui.button("Fit").clicked() {
+                self.crop_zoom = 1.0;
+                self.crop_pan = Vec2::ZERO;
+            }
+        });
         if ui.button("Rotate 90° clockwise").clicked() {
             self.rotate_selected_source_clockwise();
             return;
@@ -980,6 +1506,8 @@ impl AssetpackBuilderForWonderdraft {
             let has_sprite;
             {
                 let crop = &mut self.sources[source_index].crops[crop_index];
+                let old_width = crop.width;
+                let old_height = crop.height;
                 ui.separator();
                 ui.strong("Selected crop");
                 crop.x = crop.x.min(source_w.saturating_sub(crop.width));
@@ -1039,6 +1567,23 @@ impl AssetpackBuilderForWonderdraft {
                     });
                 crop.width = crop.width.min(source_w.saturating_sub(crop.x)).max(1);
                 crop.height = crop.height.min(source_h.saturating_sub(crop.y)).max(1);
+                if self.square_selection {
+                    let requested_side = if crop.width != old_width {
+                        crop.width
+                    } else if crop.height != old_height {
+                        crop.height
+                    } else {
+                        crop.width.max(crop.height)
+                    };
+                    set_crop_square_side(crop, requested_side, source_w, source_h);
+                } else if self.keep_aspect_ratio {
+                    let aspect = old_width as f32 / old_height.max(1) as f32;
+                    if crop.width != old_width {
+                        set_crop_aspect_from_width(crop, crop.width, aspect, source_w, source_h);
+                    } else if crop.height != old_height {
+                        set_crop_aspect_from_height(crop, crop.height, aspect, source_w, source_h);
+                    }
+                }
                 has_sprite = crop.sprite_id.is_some();
             }
 
@@ -1091,7 +1636,10 @@ impl AssetpackBuilderForWonderdraft {
                 self.sprite_pan = Vec2::ZERO;
             }
         });
-        ui.label("Mouse wheel: zoom. Middle mouse button: pan.");
+        ui.label(
+            "Wheel zoom stays anchored under the pointer; middle-drag or Ctrl+Arrow pans. Hold Shift to hide/ignore pivot and radius handles. Hold Alt to crop the sprite.",
+        );
+        ui.label("Defaults: E erase, R restore, hold C or P to temporarily pick color.");
         ui.separator();
 
         let mut delete = false;
@@ -1120,10 +1668,10 @@ impl AssetpackBuilderForWonderdraft {
 
             if sprite.kind.is_sprite() {
                 ComboBox::from_label("Draw mode")
-                    .selected_text(sprite.draw_mode.label())
+                    .selected_text(sprite.draw_mode.display_label())
                     .show_ui(ui, |ui| {
                         for mode in DrawMode::ALL {
-                            ui.selectable_value(&mut sprite.draw_mode, mode, mode.label());
+                            ui.selectable_value(&mut sprite.draw_mode, mode, mode.display_label());
                         }
                     });
                 let image_width = sprite.working.width().max(1) as i32;
@@ -1317,17 +1865,37 @@ impl AssetpackBuilderForWonderdraft {
                 source.image.height(),
             )
         };
-        if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            if scroll.abs() > 0.0 {
-                let zoom_factor = (scroll * 0.0015).exp();
-                self.crop_zoom = (self.crop_zoom * zoom_factor).clamp(0.1, 12.0);
-            }
-        }
-
         let fitted_rect = fit_image_rect(canvas_rect.shrink(12.0), image_w, image_h);
-        let image_rect =
-            Rect::from_center_size(canvas_rect.center(), fitted_rect.size() * self.crop_zoom);
+        let mut image_rect = Rect::from_center_size(
+            canvas_rect.center() + self.crop_pan,
+            fitted_rect.size() * self.crop_zoom,
+        );
+        if response.hovered() {
+            let (scroll, pointer, middle_down, pointer_delta) = ui.input(|input| {
+                (
+                    input.smooth_scroll_delta.y,
+                    input.pointer.hover_pos(),
+                    input.pointer.button_down(PointerButton::Middle),
+                    input.pointer.delta(),
+                )
+            });
+            if scroll.abs() > 0.0 && pointer.is_some_and(|pointer| image_rect.contains(pointer)) {
+                zoom_at_pointer(
+                    &mut self.crop_zoom,
+                    &mut self.crop_pan,
+                    pointer.expect("checked above"),
+                    canvas_rect.center(),
+                    (scroll * 0.0015).exp(),
+                );
+            }
+            if middle_down {
+                self.crop_pan += pointer_delta;
+            }
+            image_rect = Rect::from_center_size(
+                canvas_rect.center() + self.crop_pan,
+                fitted_rect.size() * self.crop_zoom,
+            );
+        }
         painter.image(
             texture_id,
             image_rect,
@@ -1406,6 +1974,11 @@ impl AssetpackBuilderForWonderdraft {
         if self.crop_tool == CropTool::Draw {
             self.handle_draw_crop(&response, image_rect, image_w, image_h, source_index);
             if let (Some(start), Some(current)) = (self.crop_drag_start, self.crop_drag_current) {
+                let current = if self.square_selection {
+                    constrained_draw_endpoint(start, current, image_w, image_h, 1.0)
+                } else {
+                    current
+                };
                 let preview =
                     image_points_to_screen_rect(start, current, image_rect, image_w, image_h);
                 paint_shadowed_rect_stroke(&painter, preview, Stroke::new(2.0, Color32::WHITE));
@@ -1442,19 +2015,22 @@ impl AssetpackBuilderForWonderdraft {
             if let (Some(start), Some(end)) =
                 (self.crop_drag_start.take(), self.crop_drag_current.take())
             {
+                let end = if self.square_selection {
+                    constrained_draw_endpoint(start, end, image_w, image_h, 1.0)
+                } else {
+                    end
+                };
                 let x0 = start.0.min(end.0).floor().max(0.0) as u32;
                 let y0 = start.1.min(end.1).floor().max(0.0) as u32;
                 let x1 = start.0.max(end.0).ceil().min(image_w as f32) as u32;
                 let y1 = start.1.max(end.1).ceil().min(image_h as f32) as u32;
                 if x1 > x0 && y1 > y0 {
                     let crop_id = self.alloc_id();
-                    self.sources[source_index].crops.push(CropRegion::new(
-                        crop_id,
-                        x0,
-                        y0,
-                        x1 - x0,
-                        y1 - y0,
-                    ));
+                    let mut crop = CropRegion::new(crop_id, x0, y0, x1 - x0, y1 - y0);
+                    if self.square_selection {
+                        reshape_crop_square(&mut crop, image_w, image_h);
+                    }
+                    self.sources[source_index].crops.push(crop);
                     self.selected_crop = Some(crop_id);
                     self.status = "Added a crop. Draw another or extract this one.".to_owned();
                 }
@@ -1602,8 +2178,14 @@ impl AssetpackBuilderForWonderdraft {
                         handle,
                         current.0 - start.0,
                         current.1 - start.1,
-                        image_w,
-                        image_h,
+                        (image_w, image_h),
+                        if self.square_selection {
+                            Some(1.0)
+                        } else if self.keep_aspect_ratio {
+                            Some(original.width as f32 / original.height.max(1) as f32)
+                        } else {
+                            None
+                        },
                     );
                 }
             }
@@ -1661,25 +2243,37 @@ impl AssetpackBuilderForWonderdraft {
             )
         };
 
-        if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            if scroll.abs() > 0.0 {
-                let zoom_factor = (scroll * 0.0015).exp();
-                self.sprite_zoom = (self.sprite_zoom * zoom_factor).clamp(0.1, 12.0);
-            }
-
-            let middle_down = ui.input(|input| input.pointer.button_down(PointerButton::Middle));
-            if middle_down {
-                let pointer_delta = ui.input(|input| input.pointer.delta());
-                self.sprite_pan += pointer_delta;
-            }
-        }
-
         let fitted_rect = fit_image_rect(canvas_rect.shrink(20.0), image_w, image_h);
-        let image_rect = Rect::from_center_size(
+        let mut image_rect = Rect::from_center_size(
             canvas_rect.center() + self.sprite_pan,
             fitted_rect.size() * self.sprite_zoom,
         );
+        if response.hovered() {
+            let (scroll, pointer, middle_down, pointer_delta) = ui.input(|input| {
+                (
+                    input.smooth_scroll_delta.y,
+                    input.pointer.hover_pos(),
+                    input.pointer.button_down(PointerButton::Middle),
+                    input.pointer.delta(),
+                )
+            });
+            if scroll.abs() > 0.0 && pointer.is_some_and(|pointer| image_rect.contains(pointer)) {
+                zoom_at_pointer(
+                    &mut self.sprite_zoom,
+                    &mut self.sprite_pan,
+                    pointer.expect("checked above"),
+                    canvas_rect.center(),
+                    (scroll * 0.0015).exp(),
+                );
+            }
+            if middle_down {
+                self.sprite_pan += pointer_delta;
+            }
+            image_rect = Rect::from_center_size(
+                canvas_rect.center() + self.sprite_pan,
+                fitted_rect.size() * self.sprite_zoom,
+            );
+        }
 
         paint_checkerboard(&painter, image_rect, 14.0);
         painter.image(
@@ -1695,7 +2289,26 @@ impl AssetpackBuilderForWonderdraft {
             StrokeKind::Inside,
         );
 
-        let overlay = if kind.is_sprite() {
+        let (crop_mode_held, hide_overlays, pick_color_held) = ui.input(|input| {
+            (
+                self.settings.shortcuts.sprite_crop_mode.held(input),
+                self.settings.shortcuts.sprite_hide_overlays.held(input),
+                self.settings.shortcuts.sprite_pick_color.held(input)
+                    || self
+                        .settings
+                        .shortcuts
+                        .sprite_pick_color_alternate
+                        .held(input),
+            )
+        });
+        let crop_mode = crop_mode_held || self.sprite_crop_drag.is_some();
+        let effective_tool = if pick_color_held {
+            SpriteTool::PickColor
+        } else {
+            self.sprite_tool
+        };
+
+        let overlay = if kind.is_sprite() && !hide_overlays && !crop_mode {
             let scale_x = image_rect.width() / image_w.max(1) as f32;
             let scale_y = image_rect.height() / image_h.max(1) as f32;
             let scale = scale_x.min(scale_y);
@@ -1729,14 +2342,43 @@ impl AssetpackBuilderForWonderdraft {
             None
         };
 
-        self.handle_sprite_interaction(
-            &response,
-            image_rect,
-            image_w,
-            image_h,
-            sprite_index,
-            overlay,
-        );
+        if crop_mode {
+            paint_sprite_crop_handles(&painter, image_rect);
+            if let Some(drag) = self.sprite_crop_drag {
+                let preview = sprite_crop_preview_rect(image_rect, drag);
+                painter.rect_filled(
+                    image_rect,
+                    0.0,
+                    Color32::from_rgba_unmultiplied(0, 0, 0, 80),
+                );
+                painter.image(
+                    texture_id,
+                    preview,
+                    screen_rect_to_uv(preview, image_rect),
+                    Color32::WHITE,
+                );
+                paint_shadowed_rect_stroke(&painter, preview, Stroke::new(2.0, Color32::YELLOW));
+            }
+            if self.handle_sprite_crop_interaction(
+                &response,
+                image_rect,
+                image_w,
+                image_h,
+                sprite_index,
+            ) {
+                return;
+            }
+        } else {
+            self.handle_sprite_interaction(
+                &response,
+                image_rect,
+                image_w,
+                image_h,
+                sprite_index,
+                overlay,
+                effective_tool,
+            );
+        }
 
         if response.hovered() {
             if let Some(pos) = response.hover_pos() {
@@ -1745,7 +2387,8 @@ impl AssetpackBuilderForWonderdraft {
                         || (pos.distance(overlay.pivot) - overlay.radius_screen).abs() <= 10.0
                 });
                 if image_rect.contains(pos)
-                    && self.sprite_tool != SpriteTool::PickColor
+                    && effective_tool != SpriteTool::PickColor
+                    && !crop_mode
                     && !overlay_hit
                 {
                     let radius_points =
@@ -1756,6 +2399,90 @@ impl AssetpackBuilderForWonderdraft {
         }
     }
 
+    fn handle_sprite_crop_interaction(
+        &mut self,
+        response: &egui::Response,
+        image_rect: Rect,
+        image_w: u32,
+        image_h: u32,
+        sprite_index: usize,
+    ) -> bool {
+        if let Some(pointer) = response.hover_pos() {
+            if let Some(handle) = hit_crop_handle_with_radius(pointer, image_rect, 20.0) {
+                response.clone().on_hover_cursor(crop_resize_cursor(handle));
+            }
+        }
+
+        if response.drag_started_by(PointerButton::Primary) {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                if let Some(handle) = hit_crop_handle_with_radius(pointer, image_rect, 20.0) {
+                    self.sprite_crop_drag = Some(SpriteCropDrag {
+                        handle,
+                        start: pointer,
+                        current: pointer,
+                    });
+                }
+            }
+        }
+
+        if response.dragged_by(PointerButton::Primary) {
+            if let (Some(pointer), Some(drag)) = (
+                response.interact_pointer_pos(),
+                self.sprite_crop_drag.as_mut(),
+            ) {
+                drag.current = pointer;
+            }
+        }
+
+        if response.drag_stopped_by(PointerButton::Primary) {
+            let Some(drag) = self.sprite_crop_drag.take() else {
+                return false;
+            };
+            let preview = sprite_crop_preview_rect(image_rect, drag);
+            let uv = screen_rect_to_uv(preview, image_rect);
+            let x0 = (uv.min.x * image_w as f32)
+                .floor()
+                .clamp(0.0, image_w.saturating_sub(1) as f32) as u32;
+            let y0 = (uv.min.y * image_h as f32)
+                .floor()
+                .clamp(0.0, image_h.saturating_sub(1) as f32) as u32;
+            let x1 = (uv.max.x * image_w as f32)
+                .ceil()
+                .clamp((x0 + 1) as f32, image_w as f32) as u32;
+            let y1 = (uv.max.y * image_h as f32)
+                .ceil()
+                .clamp((y0 + 1) as f32, image_h as f32) as u32;
+            if x0 == 0 && y0 == 0 && x1 == image_w && y1 == image_h {
+                return false;
+            }
+
+            let sprite = &mut self.sprites[sprite_index];
+            sprite.push_undo();
+            sprite.original = crop_rgba(&sprite.original, x0, y0, x1 - x0, y1 - y0);
+            sprite.working = crop_rgba(&sprite.working, x0, y0, x1 - x0, y1 - y0);
+            adjust_offsets_after_sprite_crop(
+                &mut sprite.offset_x,
+                &mut sprite.offset_y,
+                image_w,
+                image_h,
+                x0,
+                y0,
+                x1 - x0,
+                y1 - y0,
+            );
+            sprite.texture_dirty = true;
+            self.status = format!(
+                "Cropped sprite to {} × {} px. Undo restores the previous bounds.",
+                x1 - x0,
+                y1 - y0
+            );
+            return true;
+        }
+
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn handle_sprite_interaction(
         &mut self,
         response: &egui::Response,
@@ -1764,6 +2491,7 @@ impl AssetpackBuilderForWonderdraft {
         image_h: u32,
         sprite_index: usize,
         overlay: Option<SpriteOverlay>,
+        effective_tool: SpriteTool,
     ) {
         if let Some(overlay) = overlay {
             if let Some(pointer) = response.hover_pos() {
@@ -1819,7 +2547,7 @@ impl AssetpackBuilderForWonderdraft {
             }
         }
 
-        if self.sprite_tool == SpriteTool::PickColor {
+        if effective_tool == SpriteTool::PickColor {
             if response.clicked_by(PointerButton::Primary) {
                 if let Some(pos) = response.interact_pointer_pos() {
                     if let Some((x, y)) = screen_to_pixel(pos, image_rect, image_w, image_h) {
@@ -1835,7 +2563,7 @@ impl AssetpackBuilderForWonderdraft {
             return;
         }
 
-        let brush_mode = match self.sprite_tool {
+        let brush_mode = match effective_tool {
             SpriteTool::Erase => BrushMode::Erase,
             SpriteTool::Restore => BrushMode::Restore,
             SpriteTool::PickColor => return,
@@ -2015,8 +2743,86 @@ impl eframe::App for AssetpackBuilderForWonderdraft {
             MainTab::Assets => self.assets_ui(ui),
             MainTab::Themes => self.themes_ui(ui),
         }
+        self.settings_window(&ctx);
         self.paint_drop_overlay(&ctx);
     }
+}
+
+fn path_setting_row(ui: &mut egui::Ui, path: &mut Option<PathBuf>, dialog_title: &str) {
+    ui.horizontal(|ui| {
+        let mut text = path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .desired_width((ui.available_width() - 105.0).max(160.0)),
+        );
+        if response.changed() {
+            *path = if text.trim().is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(text.trim()))
+            };
+        }
+        if ui.button("Choose…").clicked() {
+            let mut dialog = rfd::FileDialog::new().set_title(dialog_title);
+            if let Some(current) = path.as_ref().filter(|path| path.exists()) {
+                dialog = dialog.set_directory(current);
+            }
+            if let Some(selected) = dialog.pick_folder() {
+                *path = Some(selected);
+            }
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shortcut_setting_row(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    label: &str,
+    id: &'static str,
+    binding: &mut ShortcutBinding,
+    default: ShortcutBinding,
+    capture: &mut Option<&'static str>,
+    captured_binding: Option<ShortcutBinding>,
+) {
+    if *capture == Some(id) {
+        if let Some(captured) = captured_binding {
+            *binding = captured;
+            *capture = None;
+        }
+    }
+
+    egui::Grid::new(("shortcut-row", id))
+        .num_columns(4)
+        .min_col_width(110.0)
+        .show(ui, |ui| {
+            ui.label(label);
+            ui.monospace(binding.display(ctx));
+            let changing = *capture == Some(id);
+            if ui
+                .button(if changing {
+                    "Press shortcut…"
+                } else {
+                    "Change…"
+                })
+                .clicked()
+            {
+                *capture = if changing { None } else { Some(id) };
+            }
+            if ui
+                .add_enabled(*binding != default, egui::Button::new("Reset"))
+                .clicked()
+            {
+                *binding = default;
+                if *capture == Some(id) {
+                    *capture = None;
+                }
+            }
+            ui.end_row();
+        });
 }
 
 fn rgba_to_color_image(image: &RgbaImage) -> ColorImage {
@@ -2033,6 +2839,24 @@ fn fit_image_rect(container: Rect, width: u32, height: u32) -> Rect {
         .min(container.height() / height)
         .max(0.0001);
     Rect::from_center_size(container.center(), vec2(width * scale, height * scale))
+}
+
+fn zoom_at_pointer(
+    zoom: &mut f32,
+    pan: &mut Vec2,
+    pointer: Pos2,
+    canvas_center: Pos2,
+    requested_factor: f32,
+) {
+    let old_zoom = *zoom;
+    let new_zoom = (old_zoom * requested_factor).clamp(0.1, 12.0);
+    if (new_zoom - old_zoom).abs() <= f32::EPSILON {
+        return;
+    }
+    let actual_factor = new_zoom / old_zoom.max(f32::EPSILON);
+    let old_center = canvas_center + *pan;
+    *pan += (pointer - old_center) * (1.0 - actual_factor);
+    *zoom = new_zoom;
 }
 
 fn paint_shadowed_rect_stroke(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
@@ -2180,11 +3004,146 @@ fn crop_handle_positions(rect: Rect) -> [(CropHandle, Pos2); 8] {
 }
 
 fn hit_crop_handle(pointer: Pos2, rect: Rect) -> Option<CropHandle> {
-    const HIT_RADIUS: f32 = 10.0;
+    hit_crop_handle_with_radius(pointer, rect, 10.0)
+}
+
+fn hit_crop_handle_with_radius(pointer: Pos2, rect: Rect, hit_radius: f32) -> Option<CropHandle> {
     crop_handle_positions(rect)
         .into_iter()
-        .find(|(_, position)| position.distance(pointer) <= HIT_RADIUS)
+        .find(|(_, position)| position.distance(pointer) <= hit_radius)
         .map(|(handle, _)| handle)
+}
+
+fn crop_resize_cursor(handle: CropHandle) -> CursorIcon {
+    match handle {
+        CropHandle::North | CropHandle::South => CursorIcon::ResizeVertical,
+        CropHandle::East | CropHandle::West => CursorIcon::ResizeHorizontal,
+        CropHandle::NorthWest | CropHandle::SouthEast => CursorIcon::ResizeNwSe,
+        CropHandle::NorthEast | CropHandle::SouthWest => CursorIcon::ResizeNeSw,
+    }
+}
+
+fn sprite_crop_preview_rect(image_rect: Rect, drag: SpriteCropDrag) -> Rect {
+    let delta = drag.current - drag.start;
+    let mut left = image_rect.left();
+    let mut right = image_rect.right();
+    let mut top = image_rect.top();
+    let mut bottom = image_rect.bottom();
+    let minimum = 2.0;
+
+    if matches!(
+        drag.handle,
+        CropHandle::NorthWest | CropHandle::West | CropHandle::SouthWest
+    ) {
+        left = (left + delta.x).clamp(image_rect.left(), right - minimum);
+    }
+    if matches!(
+        drag.handle,
+        CropHandle::NorthEast | CropHandle::East | CropHandle::SouthEast
+    ) {
+        right = (right + delta.x).clamp(left + minimum, image_rect.right());
+    }
+    if matches!(
+        drag.handle,
+        CropHandle::NorthWest | CropHandle::North | CropHandle::NorthEast
+    ) {
+        top = (top + delta.y).clamp(image_rect.top(), bottom - minimum);
+    }
+    if matches!(
+        drag.handle,
+        CropHandle::SouthWest | CropHandle::South | CropHandle::SouthEast
+    ) {
+        bottom = (bottom + delta.y).clamp(top + minimum, image_rect.bottom());
+    }
+    Rect::from_min_max(pos2(left, top), pos2(right, bottom))
+}
+
+fn screen_rect_to_uv(rect: Rect, image_rect: Rect) -> Rect {
+    let width = image_rect.width().max(f32::EPSILON);
+    let height = image_rect.height().max(f32::EPSILON);
+    Rect::from_min_max(
+        pos2(
+            ((rect.left() - image_rect.left()) / width).clamp(0.0, 1.0),
+            ((rect.top() - image_rect.top()) / height).clamp(0.0, 1.0),
+        ),
+        pos2(
+            ((rect.right() - image_rect.left()) / width).clamp(0.0, 1.0),
+            ((rect.bottom() - image_rect.top()) / height).clamp(0.0, 1.0),
+        ),
+    )
+}
+
+fn paint_sprite_crop_handles(painter: &egui::Painter, rect: Rect) {
+    let length = 18.0;
+    let half = 10.0;
+    let segments = [
+        (rect.left_top(), vec2(length, 0.0), vec2(0.0, length)),
+        (rect.right_top(), vec2(-length, 0.0), vec2(0.0, length)),
+        (rect.right_bottom(), vec2(-length, 0.0), vec2(0.0, -length)),
+        (rect.left_bottom(), vec2(length, 0.0), vec2(0.0, -length)),
+        (
+            pos2(rect.center().x, rect.top()),
+            vec2(-half, 0.0),
+            vec2(half, 0.0),
+        ),
+        (
+            pos2(rect.center().x, rect.bottom()),
+            vec2(-half, 0.0),
+            vec2(half, 0.0),
+        ),
+        (
+            pos2(rect.left(), rect.center().y),
+            vec2(0.0, -half),
+            vec2(0.0, half),
+        ),
+        (
+            pos2(rect.right(), rect.center().y),
+            vec2(0.0, -half),
+            vec2(0.0, half),
+        ),
+    ];
+    for (origin, first, second) in segments {
+        for offset in [vec2(2.0, 2.0), Vec2::ZERO] {
+            let color = if offset == Vec2::ZERO {
+                Color32::YELLOW
+            } else {
+                Color32::BLACK
+            };
+            let stroke = Stroke::new(if offset == Vec2::ZERO { 3.0 } else { 5.0 }, color);
+            painter.line_segment([origin + offset, origin + first + offset], stroke);
+            painter.line_segment([origin + offset, origin + second + offset], stroke);
+        }
+    }
+
+    let center_marks = [
+        (pos2(rect.center().x, rect.top()), vec2(0.0, length)),
+        (pos2(rect.center().x, rect.bottom()), vec2(0.0, -length)),
+        (pos2(rect.left(), rect.center().y), vec2(length, 0.0)),
+        (pos2(rect.right(), rect.center().y), vec2(-length, 0.0)),
+    ];
+    for (origin, direction) in center_marks {
+        painter.line_segment(
+            [origin, origin + direction],
+            Stroke::new(3.0, Color32::YELLOW),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adjust_offsets_after_sprite_crop(
+    offset_x: &mut i32,
+    offset_y: &mut i32,
+    old_width: u32,
+    old_height: u32,
+    crop_x: u32,
+    crop_y: u32,
+    new_width: u32,
+    new_height: u32,
+) {
+    let pivot_x = old_width as f32 / 2.0 + *offset_x as f32;
+    let pivot_y = old_height as f32 / 2.0 - *offset_y as f32;
+    *offset_x = (pivot_x - crop_x as f32 - new_width as f32 / 2.0).round() as i32;
+    *offset_y = (new_height as f32 / 2.0 - (pivot_y - crop_y as f32)).round() as i32;
 }
 
 fn resize_crop_from_drag(
@@ -2193,9 +3152,10 @@ fn resize_crop_from_drag(
     handle: CropHandle,
     dx: f32,
     dy: f32,
-    image_width: u32,
-    image_height: u32,
+    image_size: (u32, u32),
+    aspect_ratio: Option<f32>,
 ) {
+    let (image_width, image_height) = image_size;
     let original_left = original.x as f32;
     let original_top = original.y as f32;
     let original_right = (original.x + original.width) as f32;
@@ -2231,6 +3191,60 @@ fn resize_crop_from_drag(
         bottom = (original_bottom + dy).clamp(original_top + 1.0, image_height as f32);
     }
 
+    if let Some(aspect) = aspect_ratio.filter(|aspect| aspect.is_finite() && *aspect > 0.0) {
+        let proposed_width = (right - left).max(1.0);
+        let proposed_height = (bottom - top).max(1.0);
+        let horizontal_driver = match handle {
+            CropHandle::East | CropHandle::West => true,
+            CropHandle::North | CropHandle::South => false,
+            _ => {
+                ((proposed_width - original.width as f32) / original.width.max(1) as f32).abs()
+                    >= ((proposed_height - original.height as f32) / original.height.max(1) as f32)
+                        .abs()
+            }
+        };
+        let anchors_right = matches!(
+            handle,
+            CropHandle::NorthWest | CropHandle::West | CropHandle::SouthWest
+        );
+        let anchors_bottom = matches!(
+            handle,
+            CropHandle::NorthWest | CropHandle::North | CropHandle::NorthEast
+        );
+        let max_width = if anchors_right {
+            original_right
+        } else {
+            image_width as f32 - original_left
+        }
+        .max(1.0);
+        let max_height = if anchors_bottom {
+            original_bottom
+        } else {
+            image_height as f32 - original_top
+        }
+        .max(1.0);
+
+        let (width, height) = if horizontal_driver {
+            let width = proposed_width.min(max_width).min(max_height * aspect);
+            (width, width / aspect)
+        } else {
+            let height = proposed_height.min(max_height).min(max_width / aspect);
+            (height * aspect, height)
+        };
+        left = if anchors_right {
+            original_right - width
+        } else {
+            original_left
+        };
+        right = left + width;
+        top = if anchors_bottom {
+            original_bottom - height
+        } else {
+            original_top
+        };
+        bottom = top + height;
+    }
+
     let x0 = left
         .round()
         .clamp(0.0, image_width.saturating_sub(1) as f32) as u32;
@@ -2244,6 +3258,90 @@ fn resize_crop_from_drag(
     crop.y = y0;
     crop.width = x1 - x0;
     crop.height = y1 - y0;
+}
+
+fn reshape_crop_square(crop: &mut CropRegion, image_width: u32, image_height: u32) {
+    set_crop_square_side(crop, crop.width.max(crop.height), image_width, image_height);
+}
+
+fn set_crop_square_side(
+    crop: &mut CropRegion,
+    requested_side: u32,
+    image_width: u32,
+    image_height: u32,
+) {
+    let side = requested_side
+        .min(image_width.saturating_sub(crop.x).max(1))
+        .min(image_height.saturating_sub(crop.y).max(1))
+        .max(1);
+    crop.width = side;
+    crop.height = side;
+}
+
+fn set_crop_aspect_from_width(
+    crop: &mut CropRegion,
+    requested_width: u32,
+    aspect: f32,
+    image_width: u32,
+    image_height: u32,
+) {
+    let max_width = image_width.saturating_sub(crop.x).max(1);
+    let max_height = image_height.saturating_sub(crop.y).max(1);
+    let width = (requested_width as f32)
+        .min(max_width as f32)
+        .min(max_height as f32 * aspect)
+        .max(1.0);
+    crop.width = width.round().max(1.0) as u32;
+    crop.height = (width / aspect).round().max(1.0) as u32;
+}
+
+fn set_crop_aspect_from_height(
+    crop: &mut CropRegion,
+    requested_height: u32,
+    aspect: f32,
+    image_width: u32,
+    image_height: u32,
+) {
+    let max_width = image_width.saturating_sub(crop.x).max(1);
+    let max_height = image_height.saturating_sub(crop.y).max(1);
+    let height = (requested_height as f32)
+        .min(max_height as f32)
+        .min(max_width as f32 / aspect)
+        .max(1.0);
+    crop.height = height.round().max(1.0) as u32;
+    crop.width = (height * aspect).round().max(1.0) as u32;
+}
+
+fn constrained_draw_endpoint(
+    start: (f32, f32),
+    current: (f32, f32),
+    image_width: u32,
+    image_height: u32,
+    aspect: f32,
+) -> (f32, f32) {
+    let sign_x = if current.0 < start.0 { -1.0 } else { 1.0 };
+    let sign_y = if current.1 < start.1 { -1.0 } else { 1.0 };
+    let dx = (current.0 - start.0).abs();
+    let dy = (current.1 - start.1).abs();
+    let max_width = if sign_x < 0.0 {
+        start.0
+    } else {
+        image_width as f32 - start.0
+    };
+    let max_height = if sign_y < 0.0 {
+        start.1
+    } else {
+        image_height as f32 - start.1
+    };
+    let width_drives = dx / aspect.max(f32::EPSILON) >= dy;
+    let (width, height) = if width_drives {
+        let width = dx.min(max_width).min(max_height * aspect);
+        (width, width / aspect)
+    } else {
+        let height = dy.min(max_height).min(max_width / aspect);
+        (height * aspect, height)
+    };
+    (start.0 + sign_x * width, start.1 + sign_y * height)
 }
 
 fn image_points_to_screen_rect(
@@ -2313,8 +3411,8 @@ mod tests {
             CropHandle::East,
             10.0,
             0.0,
-            100,
-            100,
+            (100, 100),
+            None,
         );
         assert_eq!(
             (changed.x, changed.y, changed.width, changed.height),
@@ -2332,8 +3430,8 @@ mod tests {
             CropHandle::NorthWest,
             5.0,
             5.0,
-            100,
-            100,
+            (100, 100),
+            None,
         );
         assert_eq!(
             (changed.x, changed.y, changed.width, changed.height),
@@ -2351,8 +3449,8 @@ mod tests {
             CropHandle::West,
             -100.0,
             0.0,
-            100,
-            100,
+            (100, 100),
+            None,
         );
         assert_eq!(
             (changed.x, changed.y, changed.width, changed.height),
@@ -2404,5 +3502,91 @@ mod tests {
 
         adjust_crop_with_keys(&mut changed, 100, 100, true, false, true, false, true);
         assert_eq!((changed.width, changed.height), (20, 20));
+    }
+
+    #[test]
+    fn square_resize_keeps_equal_dimensions() {
+        let original = crop(10, 10, 20, 10);
+        let mut changed = original.clone();
+        resize_crop_from_drag(
+            &mut changed,
+            &original,
+            CropHandle::East,
+            10.0,
+            0.0,
+            (100, 100),
+            Some(1.0),
+        );
+        assert_eq!((changed.width, changed.height), (30, 30));
+    }
+
+    #[test]
+    fn aspect_resize_preserves_original_ratio() {
+        let original = crop(10, 10, 20, 10);
+        let mut changed = original.clone();
+        resize_crop_from_drag(
+            &mut changed,
+            &original,
+            CropHandle::East,
+            10.0,
+            0.0,
+            (100, 100),
+            Some(2.0),
+        );
+        assert_eq!((changed.width, changed.height), (30, 15));
+    }
+
+    #[test]
+    fn enabling_square_clamps_to_image_bounds() {
+        let mut changed = crop(90, 80, 30, 20);
+        reshape_crop_square(&mut changed, 100, 100);
+        assert_eq!((changed.width, changed.height), (10, 10));
+    }
+
+    #[test]
+    fn square_draw_endpoint_uses_larger_drag_axis() {
+        assert_eq!(
+            constrained_draw_endpoint((10.0, 10.0), (40.0, 25.0), 100, 100, 1.0),
+            (40.0, 40.0)
+        );
+    }
+
+    #[test]
+    fn pointer_anchored_zoom_keeps_pointed_content_stationary() {
+        let canvas_center = pos2(400.0, 300.0);
+        let pointer = pos2(525.0, 360.0);
+        let mut zoom = 2.0;
+        let mut pan = vec2(30.0, -20.0);
+        let before = (pointer - (canvas_center + pan)) / zoom;
+
+        zoom_at_pointer(&mut zoom, &mut pan, pointer, canvas_center, 1.5);
+
+        let after = (pointer - (canvas_center + pan)) / zoom;
+        assert!((before - after).length() < 0.001);
+    }
+
+    #[test]
+    fn sprite_corner_crop_preview_resizes_both_axes() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 80.0));
+        let preview = sprite_crop_preview_rect(
+            rect,
+            SpriteCropDrag {
+                handle: CropHandle::NorthWest,
+                start: rect.left_top(),
+                current: pos2(20.0, 10.0),
+            },
+        );
+        assert_eq!(
+            preview,
+            Rect::from_min_max(pos2(20.0, 10.0), pos2(100.0, 80.0))
+        );
+    }
+
+    #[test]
+    fn sprite_crop_preserves_pivot_location_in_remaining_pixels() {
+        let mut offset_x = 10;
+        let mut offset_y = -5;
+        adjust_offsets_after_sprite_crop(&mut offset_x, &mut offset_y, 100, 80, 10, 5, 70, 60);
+        assert_eq!((offset_x, offset_y), (15, -10));
     }
 }
