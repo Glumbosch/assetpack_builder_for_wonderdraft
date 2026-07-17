@@ -3,6 +3,72 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::shortcuts::ShortcutSettings;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppSettings {
+    pub install_directory: Option<PathBuf>,
+    pub default_pack_name: String,
+    pub export_directory: Option<PathBuf>,
+    pub export_without_asking: bool,
+    pub shortcuts: ShortcutSettings,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            install_directory: find_install_root(),
+            default_pack_name: "MyFantasyPack".to_owned(),
+            export_directory: None,
+            export_without_asking: false,
+            shortcuts: ShortcutSettings::default(),
+        }
+    }
+}
+
+pub fn load() -> AppSettings {
+    let Some(path) = settings_path() else {
+        return AppSettings::default();
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn save(settings: &AppSettings) -> Result<()> {
+    let path = settings_path().context("Could not determine the settings directory")?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Could not create {}", parent.display()))?;
+    }
+    let text = serde_json::to_string_pretty(settings)?;
+    fs::write(&path, text).with_context(|| format!("Could not write {}", path.display()))
+}
+
+fn settings_path() -> Option<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Library/Application Support"))
+    } else {
+        env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join(".config"))
+            })
+    }?;
+    Some(base.join("assetpack-builder-for-wonderdraft/settings.json"))
+}
+
 pub fn default_wonderdraft_folder() -> PathBuf {
     let home = PathBuf::from(env::var_os("HOME").unwrap_or_else(|| ".".into()));
     if cfg!(target_os = "windows") {
@@ -116,5 +182,15 @@ custom_assets_directory="/home/test/Wonderdraft2"
             install_root_from_selection(Path::new("/tmp/Wonderdraft/assets")),
             Some(PathBuf::from("/tmp/Wonderdraft"))
         );
+    }
+
+    #[test]
+    fn older_partial_settings_use_new_defaults() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"default_pack_name":"Old pack"}"#).unwrap();
+        assert_eq!(settings.default_pack_name, "Old pack");
+        assert!(!settings.export_without_asking);
+        assert!(settings.export_directory.is_none());
+        assert_eq!(settings.shortcuts, ShortcutSettings::default());
     }
 }

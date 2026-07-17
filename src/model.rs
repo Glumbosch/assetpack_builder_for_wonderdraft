@@ -33,6 +33,18 @@ impl DrawMode {
             DrawMode::CustomColors => "Custom colors (RGB channels)",
         }
     }
+
+    pub fn emoji(self) -> &'static str {
+        match self {
+            DrawMode::Normal => "🖼️",
+            DrawMode::SampleColor => "🖌️",
+            DrawMode::CustomColors => "🎨",
+        }
+    }
+
+    pub fn display_label(self) -> String {
+        format!("{} {}", self.label(), self.emoji())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,14 +171,21 @@ pub struct SpriteAsset {
     pub offset_y: i32,
     pub texture: Option<TextureHandle>,
     pub texture_dirty: bool,
-    pub undo: Vec<RgbaImage>,
-    pub redo: Vec<RgbaImage>,
+    pub undo: Vec<SpriteEditSnapshot>,
+    pub redo: Vec<SpriteEditSnapshot>,
+}
+
+pub struct SpriteEditSnapshot {
+    original: RgbaImage,
+    working: RgbaImage,
+    offset_x: i32,
+    offset_y: i32,
 }
 
 impl SpriteAsset {
     pub fn push_undo(&mut self) {
         const MAX_HISTORY: usize = 30;
-        self.undo.push(self.working.clone());
+        self.undo.push(self.snapshot());
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
@@ -175,8 +194,8 @@ impl SpriteAsset {
 
     pub fn undo(&mut self) -> bool {
         if let Some(previous) = self.undo.pop() {
-            self.redo
-                .push(std::mem::replace(&mut self.working, previous));
+            self.redo.push(self.snapshot());
+            self.restore_snapshot(previous);
             self.texture_dirty = true;
             true
         } else {
@@ -186,12 +205,29 @@ impl SpriteAsset {
 
     pub fn redo(&mut self) -> bool {
         if let Some(next) = self.redo.pop() {
-            self.undo.push(std::mem::replace(&mut self.working, next));
+            self.undo.push(self.snapshot());
+            self.restore_snapshot(next);
             self.texture_dirty = true;
             true
         } else {
             false
         }
+    }
+
+    fn snapshot(&self) -> SpriteEditSnapshot {
+        SpriteEditSnapshot {
+            original: self.original.clone(),
+            working: self.working.clone(),
+            offset_x: self.offset_x,
+            offset_y: self.offset_y,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: SpriteEditSnapshot) {
+        self.original = snapshot.original;
+        self.working = snapshot.working;
+        self.offset_x = snapshot.offset_x;
+        self.offset_y = snapshot.offset_y;
     }
 }
 

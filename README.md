@@ -15,6 +15,8 @@ It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, P
 This project is not affiliated with or endorsed by Wonderdraft or Megasploot.
 Wonderdraft and its bundled assets are not distributed with this project.
 
+Project documentation is also available in the [GitHub wiki](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/wiki).
+
 ## AI generation disclosure
 
 The current project-authored source code was generated with AI assistance. See
@@ -32,10 +34,12 @@ Privacy & Security on first launch.
 ## Implemented features
 
 - Import one or many PNG, JPEG, WebP, BMP, or TIFF images.
-- Drag image files anywhere in the application window to import them, with a full-window drop overlay.
+- Separate source-image and extracted-sprite import buttons and drop areas. Images dropped on the sprite area are imported as complete, uncropped sprites.
+- Drag a source-image row onto the extracted-sprite area to extract the complete image.
 - Draw any number of crop rectangles on one source image.
 - Select, move, and resize crop rectangles using eight draggable edge/corner handles.
 - Edit exact crop X, Y, width, and height values.
+- Optional square crop selection and aspect-ratio-preserving resize modes.
 - Copy crop regions and extract one crop or every unextracted crop as independent sprites.
 - Variable-size erase brush that sets alpha to zero.
 - Variable-size restore brush that copies the original RGBA pixel values back.
@@ -66,10 +70,12 @@ Privacy & Security on first launch.
 - Wonderdraft directory export with duplicate-name and invalid-theme checks.
 - Automatic Wonderdraft installation-folder discovery from `config.ini` on Linux, Windows, and macOS.
 - One-click **Install asset pack**, honoring Wonderdraft's `custom_assets_directory` override and offering a folder picker when automatic discovery is unavailable.
+- Persistent settings for the install directory, default pack name, default export directory, and exporting without another directory prompt.
+- Double-click a sprite-list name to edit it inline and update its PNG/metadata name at the same time.
 
 ## Typical workflow
 
-1. Click **Import images**, or drag files anywhere into the window.
+1. Click **Import source images**, or drop files into the source section. Use the extracted-sprite button/drop area to bypass cropping.
 2. Select a source image. Imported images start with no crop regions.
 3. Choose **Draw crop** and drag around every sprite contained in the source image.
 4. Use **Select / move / resize** to move a crop or drag one of its eight handles.
@@ -80,6 +86,65 @@ Privacy & Security on first launch.
 9. Assign the asset type, category, name, draw mode, radius, and offsets.
 10. Add or edit themes in the **Themes** tab.
 11. Click **Install asset pack** to copy it directly into Wonderdraft, or **Export Wonderdraft pack** to choose another destination.
+
+Use **Settings** to configure the install directory and defaults for new pack names and exports. When **Do not ask for an export directory** is enabled, **Export Wonderdraft pack** writes directly to the configured export folder.
+
+## Keyboard shortcuts
+
+Open **Settings → Keyboard shortcuts** to see or change every binding. Choose **Change…** and press the new key combination. Every binding has its own **Reset** button, and **Reset all keyboard shortcuts** restores the complete default set. Shortcuts are stored in the application settings and are not triggered while typing in a text field. In the table below, `Ctrl/Cmd` means Ctrl on Windows/Linux and Command on macOS.
+
+### Application defaults
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl/Cmd+N` | New project |
+| `Ctrl/Cmd+O` | Open project |
+| `Ctrl/Cmd+S` | Save project |
+| `Ctrl/Cmd+Shift+S` | Save project as |
+| `Ctrl/Cmd+1` | Show Assets tab |
+| `Ctrl/Cmd+2` | Show Themes tab |
+
+### Crop workspace defaults
+
+| Shortcut | Action |
+| --- | --- |
+| `Delete` or `Backspace` | Delete the selected crop |
+| `Ctrl+Arrow keys` | Pan the source image by 24 screen pixels |
+| `Arrow keys` or `W/A/S/D` | Move the selected crop by one image pixel |
+| `Shift+Arrow keys` or `Shift+W/A/S/D` | Resize the selected crop by one image pixel |
+| `C` | Select the Draw crop tool |
+| `V` | Select the Select/move/resize tool |
+| `F` | Fit the source image and reset pan |
+| `Enter` | Extract the selected crop as a sprite |
+| `Ctrl/Cmd+C` | Copy the selected crop |
+| `Escape` | Cancel the current draw, move, or resize interaction |
+
+### Sprite settings workspace defaults
+
+| Shortcut | Action |
+| --- | --- |
+| `Delete` or `Backspace` | Delete the selected sprite |
+| `Ctrl+Arrow keys` | Pan the sprite image by 24 screen pixels |
+| `E` | Switch the transparency tool to Erase |
+| `R` | Switch the transparency tool to Restore |
+| Hold `C` or `P` | Temporarily use Pick color; releasing the key restores the previous tool |
+| Hold `Shift` | Hide and disable the pivot and radius handles; erase/restore clicks pass through normally |
+| Hold `Alt/Option` | Show sprite crop handles and enable crop resizing |
+| `F` | Fit the sprite and reset pan |
+| `[` / `]` | Decrease / increase the brush diameter |
+| `Ctrl/Cmd+Z` | Undo the last transparency or sprite-crop edit |
+| `Ctrl/Cmd+Shift+Z` | Redo the last sprite edit |
+
+### Canvas mouse controls
+
+| Workspace | Control | Action |
+| --- | --- | --- |
+| Crop and sprite | Mouse wheel while the pointer is over the image | Zoom toward the pointed image location; that location stays under the pointer |
+| Crop and sprite | Middle-button drag | Pan the image |
+| Crop | Primary-button drag outside crops | Draw a crop |
+| Crop | Primary-button drag inside a crop / on a crop handle | Move / resize the crop |
+| Sprite | Primary-button click or drag | Apply the active erase, restore, or pick-color tool |
+| Sprite while holding `Alt/Option` | Primary-button drag on a corner or edge marker | Crop from that corner or edge; corner handles resize in both directions |
 
 ## Install directly into Wonderdraft
 
