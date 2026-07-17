@@ -1,8 +1,33 @@
 # Wonderdraft Asset Studio
 
+[![CI](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml/badge.svg)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/Glumbosch/assetpack_builder_for_wonderdraft)](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A small native desktop application for preparing Wonderdraft asset packs from ordinary images and sprite sheets.
 
 It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, Python, or an embedded browser. Release builds are distributed as one executable per operating system.
+
+> This is an experimental, unofficial tool. Keep backups of source images and
+> project files, and inspect installed packs in Wonderdraft before relying on
+> them.
+
+This project is not affiliated with or endorsed by Wonderdraft or Megasploot.
+Wonderdraft and its bundled assets are not distributed with this project.
+
+## AI generation disclosure
+
+The current project-authored source code was generated with AI assistance. See
+the full [AI generation disclosure](AI_DISCLOSURE.md). Project-authored
+material is distributed under the [MIT License](LICENSE); third-party
+dependencies, Wonderdraft, and user-provided assets retain their own terms.
+
+## Download
+
+Prebuilt Linux (x86_64), Windows (x86_64), and macOS (Intel) executables are
+attached to each [GitHub release](https://github.com/Glumbosch/assetpack_builder_for_wonderdraft/releases/latest).
+The macOS binary is unsigned, so macOS may require explicit approval in
+Privacy & Security on first launch.
 
 ## Implemented features
 
@@ -136,6 +161,23 @@ A convenience script is included:
 ./build-linux.sh
 ```
 
+### Linux application launcher
+
+After building the release executable, add Wonderdraft Asset Studio to your
+desktop application menu without administrator access:
+
+```bash
+./install-linux-launcher.sh
+```
+
+The installer copies the executable below `XDG_DATA_HOME` (normally
+`~/.local/share`), installs `assetpack_builder_for_wonderdraft.png` as the
+fallback icon and `assetpack_builder_for_wonderdraft.svg` as the scalable icon,
+and creates
+`~/.local/share/applications/wonderdraft-asset-studio.desktop`. The repository
+also contains `wonderdraft-asset-studio.desktop`, the portable launcher
+template used by the installer.
+
 ## Build on Windows
 
 Install:
@@ -162,6 +204,9 @@ A convenience script is included:
 .\build-windows.ps1
 ```
 
+For development, `start_wonderdraft_asset_studio.bat` builds and runs the app
+from the repository.
+
 ## Build on macOS
 
 Install Rust using rustup, then run:
@@ -182,6 +227,18 @@ target/release/wonderdraft-asset-studio
 The included GitHub Actions workflow builds and tests Linux, Windows, and macOS versions. Push the project to GitHub, open the **Actions** tab, run **Build release binaries**, and download the three artifacts.
 
 Creating a Git tag beginning with `v`, such as `v0.2.0`, also creates a GitHub Release and attaches all three binaries.
+
+## Development and validation
+
+```bash
+cargo fmt --all -- --check
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow,
+[AI_DISCLOSURE.md](AI_DISCLOSURE.md) for the AI-use disclosure, and
+[LICENSE](LICENSE) for licensing terms.
 
 ## Algorithm correspondence
 
