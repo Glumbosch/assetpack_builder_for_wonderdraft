@@ -39,6 +39,8 @@ It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, P
 - Multiple `.wonderdraft_theme` files per project.
 - Project saving, including edited/original sprite images in a sidecar data folder.
 - Wonderdraft directory export with duplicate-name and invalid-theme checks.
+- Automatic Wonderdraft installation-folder discovery from `config.ini` on Linux, Windows, and macOS.
+- One-click **Install asset pack**, honoring Wonderdraft's `custom_assets_directory` override and offering a folder picker when automatic discovery is unavailable.
 
 ## Typical workflow
 
@@ -51,7 +53,18 @@ It is written in Rust with `egui/eframe`. It does not use Electron, npm, Java, P
 7. Zoom with the wheel or zoom slider, pan with the middle mouse button, and reset with **Fit**.
 8. Drag the red pivot marker to set offsets, or drag the orange circle to set the radius.
 9. Assign the asset type, category, name, draw mode, radius, and offsets.
-10. Add or edit themes in the **Themes** tab, then click **Export Wonderdraft pack**.
+10. Add or edit themes in the **Themes** tab.
+11. Click **Install asset pack** to copy it directly into Wonderdraft, or **Export Wonderdraft pack** to choose another destination.
+
+## Install directly into Wonderdraft
+
+The **Install asset pack** button looks for the same Wonderdraft user-data locations used by Miracle Draft Map Helper:
+
+- Windows: `%APPDATA%\Wonderdraft\config.ini`
+- macOS: `~/Library/Application Support/Wonderdraft/config.ini`
+- Linux: `~/.local/share/Wonderdraft/config.ini`
+
+If `config.ini` contains `custom_assets_directory`, that directory takes precedence. Otherwise the standard Wonderdraft user-data directory is used. If the folder cannot be detected, the app asks you to select either the folder containing `config.ini` or the custom content root. Selecting an `assets` folder also works; the app uses its parent so exported paths remain `assets/<PackName>/...` rather than `assets/assets/<PackName>/...`.
 
 ## Exported structure
 
@@ -149,11 +162,26 @@ A convenience script is included:
 .\build-windows.ps1
 ```
 
-## Automatic Windows and Linux builds
+## Build on macOS
 
-The included GitHub Actions workflow builds and tests both operating-system versions. Push the project to GitHub, open the **Actions** tab, run **Build release binaries**, and download the two artifacts.
+Install Rust using rustup, then run:
 
-Creating a Git tag beginning with `v`, such as `v0.2.0`, also runs the workflow.
+```bash
+cargo test
+cargo build --release
+```
+
+The executable is:
+
+```text
+target/release/wonderdraft-asset-studio
+```
+
+## Automatic Linux, Windows, and macOS builds
+
+The included GitHub Actions workflow builds and tests Linux, Windows, and macOS versions. Push the project to GitHub, open the **Actions** tab, run **Build release binaries**, and download the three artifacts.
+
+Creating a Git tag beginning with `v`, such as `v0.2.0`, also creates a GitHub Release and attaches all three binaries.
 
 ## Algorithm correspondence
 

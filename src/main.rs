@@ -4,6 +4,7 @@ mod app;
 mod export;
 mod image_ops;
 mod model;
+mod settings;
 
 use app::WonderdraftAssetStudio;
 

@@ -9,9 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
 use crate::image_ops::load_oriented_rgba;
-use crate::model::{
-    ProjectFile, SourceImage, SourceRecord, SpriteAsset, SpriteRecord, ThemeDraft,
-};
+use crate::model::{ProjectFile, SourceImage, SourceRecord, SpriteAsset, SpriteRecord, ThemeDraft};
 
 #[derive(Debug, Default)]
 pub struct ExportReport {
@@ -39,13 +37,13 @@ pub fn sanitize_file_stem(value: &str) -> String {
     for ch in value.chars() {
         if ch.is_alphanumeric() || ch == '_' || ch == '-' {
             result.push(ch);
-        } else if ch.is_whitespace() {
-            result.push('_');
         } else {
             result.push('_');
         }
     }
-    let trimmed = result.trim_matches(|c| c == '.' || c == ' ' || c == '_').to_owned();
+    let trimmed = result
+        .trim_matches(|c| c == '.' || c == ' ' || c == '_')
+        .to_owned();
     if trimmed.is_empty() {
         "sprite".to_owned()
     } else {
@@ -72,7 +70,7 @@ fn sanitize_component(value: &str, fallback: &str) -> String {
 
 fn safe_category_path(category: &str) -> PathBuf {
     let mut result = PathBuf::new();
-    for component in category.split(|c| c == '/' || c == '\\') {
+    for component in category.split(['/', '\\']) {
         let clean = sanitize_component(component, "");
         if !clean.is_empty() {
             result.push(clean);
@@ -110,9 +108,8 @@ pub fn export_pack(
         }
 
         let destination_folder = root.join(&relative_folder);
-        fs::create_dir_all(&destination_folder).with_context(|| {
-            format!("Could not create {}", destination_folder.display())
-        })?;
+        fs::create_dir_all(&destination_folder)
+            .with_context(|| format!("Could not create {}", destination_folder.display()))?;
         let destination_file = root.join(&relative_file);
         sprite
             .working
@@ -146,8 +143,8 @@ pub fn export_pack(
 
     for (folder, metadata) in metadata_by_folder {
         let path = root.join(folder).join(".wonderdraft_symbols");
-        let file = File::create(&path)
-            .with_context(|| format!("Could not create {}", path.display()))?;
+        let file =
+            File::create(&path).with_context(|| format!("Could not create {}", path.display()))?;
         serde_json::to_writer_pretty(BufWriter::new(file), &metadata)
             .with_context(|| format!("Could not write {}", path.display()))?;
         report.metadata_files += 1;

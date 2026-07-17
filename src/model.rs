@@ -67,7 +67,10 @@ impl AssetKind {
     }
 
     pub fn is_sprite(self) -> bool {
-        matches!(self, AssetKind::Symbols | AssetKind::Mountains | AssetKind::Trees)
+        matches!(
+            self,
+            AssetKind::Symbols | AssetKind::Mountains | AssetKind::Trees
+        )
     }
 
     pub fn relative_base(self, pack_name: &str) -> PathBuf {
@@ -172,7 +175,8 @@ impl SpriteAsset {
 
     pub fn undo(&mut self) -> bool {
         if let Some(previous) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.working, previous));
+            self.redo
+                .push(std::mem::replace(&mut self.working, previous));
             self.texture_dirty = true;
             true
         } else {
@@ -273,7 +277,7 @@ pub fn default_theme_json() -> String {
     }
   }
 }"#
-        .to_owned()
+    .to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
