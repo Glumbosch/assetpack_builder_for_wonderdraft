@@ -78,7 +78,7 @@ Privacy & Security on first launch.
 
 ## Typical workflow
 
-1. Click **Import source images**, or drop files into the source section. Use the extracted-sprite button/drop area to bypass cropping.
+1. Click **Import source images**, click the empty crop viewer, or drop files into the source section/crop viewer. Use the extracted-sprite button, list area, or sprite viewer to bypass cropping.
 2. Select a source image. Imported images start with no crop regions.
 3. Choose **Draw crop** and drag around every sprite contained in the source image.
 4. Use **Select / move / resize** to move a crop or drag one of its eight handles.
@@ -146,12 +146,16 @@ Open **Settings → Keyboard shortcuts** to see or change every binding. Choose 
 
 | Workspace | Control | Action |
 | --- | --- | --- |
-| Crop and sprite | Mouse wheel while the pointer is over the viewer | Zoom toward the pointed location, including below 1×; viewer zoom is disabled while Settings is open |
+| Crop and sprite | Mouse wheel while the pointer is over the viewer | Zoom toward the pointer at 1× and above; below 1× the image keeps its position. Viewer zoom is disabled while Settings is open |
+| Sprite | `Ctrl` + mouse wheel | Change the active brush diameter (or picked-color tolerance) without zooming |
 | Crop and sprite | Middle-button drag | Pan the image |
 | Crop | Primary-button drag outside crops | Draw a crop |
 | Crop | Primary-button drag inside a crop / on a crop handle | Move / resize the crop |
 | Crop | Double-click a crop | Extract it if needed, then open and select its sprite |
+| Crop with no selected source | Primary-button click | Open the source-image import dialog |
+| Crop viewer | Drop image files | Import them as source images |
 | Sprite | Primary-button click or drag | Apply Erase, Restore, or Erase picked color; Pick color samples on click |
+| Sprite viewer with a selected sprite | Drop image files | Import the complete images directly as sprites |
 | Sprite while holding `Alt/Option` | Primary-button drag on a corner or edge marker | Shrink or enlarge the sprite crop within the source image; the linked crop in the Crop workspace updates too |
 | Any slider | Mouse wheel while hovered | Increase or decrease the slider value without scrolling its surrounding panel |
 | Any focused slider | Arrow Left/Right | Decrease or increase the slider value |

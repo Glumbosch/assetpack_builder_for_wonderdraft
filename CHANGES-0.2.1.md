@@ -1,6 +1,8 @@
 # GUI interaction update 0.2.1
 
-- Fixed source-image and extracted-sprite wheel zoom at zoom factors below 1×. Zoom remains anchored to the pointer anywhere inside the viewer.
+- Fixed source-image and extracted-sprite wheel zoom at zoom factors below 1×. Below 1×, changing zoom no longer pans or moves the image.
+- Reserved Ctrl+wheel in the sprite viewer for the current brush diameter or picked-color tolerance, without applying zoom.
+- Made the crop viewer a source-image drop target and its empty state a clickable import target. The selected-sprite viewer accepts complete images as directly imported sprites.
 - Disabled viewer zoom while the Settings window is open.
 - Prevented a hovered slider from scrolling its surrounding settings panel; wheel and arrow-key slider control remain available.
 - Replaced the sprite transparency tool text buttons with theme-aware icons and explanatory tooltips.
